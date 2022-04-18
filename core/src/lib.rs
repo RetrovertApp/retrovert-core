@@ -1,5 +1,5 @@
 use anyhow::Result;
-use log::{error, LevelFilter, Log, SetLoggerError};
+use log::{trace, LevelFilter, Log, SetLoggerError};
 
 pub mod plugin_handler;
 
@@ -18,20 +18,20 @@ impl Core {
 #[no_mangle]
 pub fn core_create() -> *mut Core {
     let core = Box::leak(Box::new(Core::new()));
-    error!("core create");
+    trace!("core create");
     core as *mut Core
 }
 
 #[no_mangle]
 pub fn core_destroy(core: *mut Core, _prepare_reload: bool) {
     let _ = unsafe { Box::from_raw(core) };
-    error!("core destroy");
+    trace!("core destroy");
 }
 
 #[no_mangle]
 pub fn core_update(core: *mut Core) {
     let core: &mut Core = unsafe { &mut *core };
-    error!("created update");
+    trace!("created update");
     core.update();
 }
 

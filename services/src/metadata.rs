@@ -5,6 +5,10 @@ pub struct Metadata {
 }
 
 impl Metadata {
+    pub fn new() -> Metadata {
+        Metadata { _dummy: 0 }
+    }
+
     pub fn create_url(&mut self, _url: &str) -> MetadataId {
         0
     }

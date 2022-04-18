@@ -41,7 +41,7 @@ extern "C" fn io_free_url_to_memory(self_c: *mut c_void, memory: *mut core::ffi:
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct IoFFI {
-    private_data: *mut c_void,
+    pub private_data: *mut c_void,
     pub exists: unsafe extern "C" fn(self_c: *mut c_void, url: *const c_char) -> bool,
     pub read_url_to_memory:
         unsafe extern "C" fn(self_c: *mut c_void, url: *const c_char) -> IoReadUrlResult,
@@ -50,7 +50,7 @@ pub struct IoFFI {
 }
 
 impl IoFFI {
-    pub fn new(instance: *mut IoFFI) -> IoFFI {
+    pub fn new(instance: *mut Io) -> IoFFI {
         IoFFI {
             private_data: instance as *mut c_void,
             exists: io_exists,
@@ -72,8 +72,7 @@ pub enum LogLevel {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct LogFFI {
-    private_data: *mut c_void,
-    pub set_base_name: unsafe extern "C" fn(self_c: *mut c_void, base_name: *const c_char),
+    pub private_data: *mut c_void,
     pub log: unsafe extern "C" fn(
         self_c: *mut c_void,
         level: u32,
@@ -158,7 +157,7 @@ extern "C" fn metadata_add_instrument(
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct MetadataFFI {
-    private_data: *mut c_void,
+    pub private_data: *mut c_void,
     pub create_url: unsafe extern "C" fn(self_c: *mut c_void, url: *const c_char) -> MetadataId,
     pub set_tag: unsafe extern "C" fn(
         self_c: *mut c_void,
@@ -182,7 +181,7 @@ pub struct MetadataFFI {
 }
 
 impl MetadataFFI {
-    pub fn new(instance: *mut MetadataFFI) -> MetadataFFI {
+    pub fn new(instance: *mut Metadata) -> MetadataFFI {
         MetadataFFI {
             private_data: instance as *mut c_void,
             create_url: metadata_create_url,
@@ -433,7 +432,7 @@ extern "C" fn settings_get_bool(
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SettingsFFI {
-    private_data: *mut c_void,
+    pub private_data: *mut c_void,
     pub reg: unsafe extern "C" fn(
         self_c: *mut c_void,
         name: *const c_char,
@@ -463,7 +462,7 @@ pub struct SettingsFFI {
 }
 
 impl SettingsFFI {
-    pub fn new(instance: *mut SettingsFFI) -> SettingsFFI {
+    pub fn new(instance: *mut Settings) -> SettingsFFI {
         SettingsFFI {
             private_data: instance as *mut c_void,
             reg: settings_reg,

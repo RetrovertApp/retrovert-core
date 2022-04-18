@@ -8,6 +8,10 @@ pub struct Io {
 }
 
 impl Io {
+    pub fn new() -> Io {
+        Io { dummy: 0 }
+    }
+
     pub fn exists(&mut self, _url: &str) -> bool {
         false
     }

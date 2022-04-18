@@ -6,6 +6,10 @@ pub struct Settings {
 }
 
 impl Settings {
+    pub fn new() -> Settings {
+        Settings { foo: 0 }
+    }
+
     pub fn reg(&mut self, _name: &str, _settings: &[Setting]) -> SettingsResult {
         SettingsResult::Ok
     }
