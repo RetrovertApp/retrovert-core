@@ -1,4 +1,4 @@
-use crate::service_gen::*;
+use crate::ffi_gen::*;
 use std::ptr;
 
 pub struct Settings {

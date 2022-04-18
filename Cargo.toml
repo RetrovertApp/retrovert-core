@@ -1,2 +1,2 @@
 [workspace]
-members = ["core", "services"]
+members = ["core", "services", "plugin_types"]

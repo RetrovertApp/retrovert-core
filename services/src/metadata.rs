@@ -1,4 +1,4 @@
-use crate::service_gen::MetadataId;
+use crate::ffi_gen::MetadataId;
 
 pub struct Metadata {
     _dummy: u32,

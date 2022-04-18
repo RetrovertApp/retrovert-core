@@ -1,6 +1,8 @@
 use anyhow::Result;
 use log::{error, LevelFilter, Log, SetLoggerError};
 
+pub mod plugin_handler;
+
 pub struct Core {
     pub dummy: u32,
 }

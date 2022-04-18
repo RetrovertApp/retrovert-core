@@ -1,9 +1,6 @@
+pub mod ffi_gen;
 pub mod io;
 pub mod log;
 pub mod metadata;
-pub mod service_gen;
 pub mod settings;
-
-pub fn foobar() {
-    println!("Test")
-}
+pub use ffi_gen::*;

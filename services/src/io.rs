@@ -1,7 +1,7 @@
 use std::os::raw::c_void;
 use std::ptr;
 
-use crate::service_gen::IoReadUrlResult;
+use crate::ffi_gen::IoReadUrlResult;
 
 pub struct Io {
     dummy: u32,
