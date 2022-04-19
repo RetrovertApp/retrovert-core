@@ -14,6 +14,6 @@ plugin_types = { path = "../plugin_types" }
 services = { path = "../services" }
 log = "0.4"
 anyhow = "1.0"
-dynamic_reload = "0.8.0"
+libloading = "0.7.3"
 walkdir = "2"
 cfixed-string = "1"

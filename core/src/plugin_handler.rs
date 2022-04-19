@@ -1,22 +1,19 @@
 use anyhow::{bail, Result};
 use cfixed_string::CFixedString;
-use dynamic_reload::{DynamicReload, Lib, PlatformName, Search, Symbol};
+use libloading::{Library, Symbol};
 use log::{error, trace};
 use plugin_types::{PlaybackPlugin, ProbeResult};
 use std::{sync::Arc, time::Duration};
 use walkdir::{DirEntry, WalkDir};
 
-#[derive(Clone)]
 pub struct DecoderPlugin {
-    pub plugin: Arc<Lib>,
-    pub user_data: u64,
+    pub plugin: Library,
     pub plugin_path: String,
     pub plugin_funcs: PlaybackPlugin,
 }
 
 pub struct Plugins {
     pub decoder_plugins: Vec<Box<DecoderPlugin>>,
-    pub plugin_handler: DynamicReload,
 }
 
 impl DecoderPlugin {
@@ -76,23 +73,17 @@ impl Plugins {
     pub fn new() -> Plugins {
         Plugins {
             decoder_plugins: Vec::new(),
-            plugin_handler: DynamicReload::new(
-                Some(vec!["."]),
-                None,
-                Search::Default,
-                Duration::from_secs(2),
-            ),
         }
     }
 
     fn add_plugin_lib(
         &mut self,
         name: &str,
-        plugin: &Arc<Lib>,
+        plugin: Library,
         service_api: *const services::ServiceFFI,
     ) -> Result<bool> {
         let func: Symbol<extern "C" fn() -> *const plugin_types::PlaybackPlugin> =
-            unsafe { plugin.lib.get(b"rv_playback_plugin\0")? };
+            unsafe { plugin.get(b"rv_playback_plugin\0")? };
 
         let plugin_funcs = unsafe { *func() };
 
@@ -154,8 +145,7 @@ impl Plugins {
         */
 
         self.decoder_plugins.push(Box::new(DecoderPlugin {
-            plugin: plugin.clone(),
-            user_data: 0,
+            plugin,
             plugin_path: name.to_owned(),
             plugin_funcs,
         }));
@@ -194,9 +184,9 @@ impl Plugins {
     }
 
     pub fn add_plugin(&mut self, name: &str, service_api: *const services::ServiceFFI) {
-        match unsafe { self.plugin_handler.add_library(name, PlatformName::No) } {
+        match unsafe { Library::new(name) } {
             Ok(lib) => {
-                if let Err(e) = self.add_plugin_lib(name, &lib, service_api) {
+                if let Err(e) = self.add_plugin_lib(name, lib, service_api) {
                     error!("Unable to add {} because of error {:?}", name, e);
                 }
             }
