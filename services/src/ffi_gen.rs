@@ -1,5 +1,4 @@
 use crate::io::Io;
-use crate::log::Log;
 use crate::metadata::Metadata;
 use crate::settings::Settings;
 use std::borrow::Cow;

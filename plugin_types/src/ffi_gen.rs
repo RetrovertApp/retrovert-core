@@ -1,7 +1,9 @@
 use services::*;
 use std::borrow::Cow;
 use std::ffi::CStr;
+#[allow(unused)]
 use std::os::raw::{c_char, c_void};
+#[allow(unused)]
 use std::slice;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]

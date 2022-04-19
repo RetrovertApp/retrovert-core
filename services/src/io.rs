@@ -4,12 +4,12 @@ use std::ptr;
 use crate::ffi_gen::IoReadUrlResult;
 
 pub struct Io {
-    dummy: u32,
+    _dummy: u32,
 }
 
 impl Io {
     pub fn new() -> Io {
-        Io { dummy: 0 }
+        Io { _dummy: 0 }
     }
 
     pub fn exists(&mut self, _url: &str) -> bool {
