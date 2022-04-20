@@ -1,5 +1,6 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use log::{error, trace, LevelFilter, Log, SetLoggerError};
+use std::path::{PathBuf, Path};
 
 pub mod plugin_handler;
 
@@ -18,10 +19,10 @@ impl Core {
 /// Finds the data directory relative to the executable.
 /// This is because it's possible to have data next to the exe, but also running
 /// the applications as targeht/path/exe and the location is in the root then
-fn find_data_directory() -> Result<()> {
+fn find_data_directory() -> Result<PathBuf> {
     let current_path = std::env::current_dir().with_context(|| "Unable to get current dir!")?;
     if current_path.join("data").exists() {
-        return Ok(());
+        return Ok(current_path);
     }
 
     let mut path = current_path
@@ -32,15 +33,14 @@ fn find_data_directory() -> Result<()> {
         trace!("seaching for data in {:?}", path);
 
         if path.join("data").exists() {
-            std::env::set_current_dir(path)?;
-            return Ok(());
+            return Ok(path.to_path_buf());
         }
 
         path = path.parent().with_context(|| "Unable to get parent dir")?;
     }
 }
 
-fn init_data_directory() -> Result<()> {
+fn init_data_directory(datadir_over: &Option<String>) -> Result<()> {
     let current_exe = std::env::current_exe()?;
     std::env::set_current_dir(
         current_exe
@@ -48,7 +48,17 @@ fn init_data_directory() -> Result<()> {
             .with_context(|| "Unable to get parent directory")?,
     )?;
 
-    find_data_directory().with_context(|| "Unable to find data directory")?;
+    let datadir = if let Some(over_path) = datadir_over {
+        let over = Path::new(over_path);
+
+        if !over.exists() {
+            bail!("--datadir {} doesn't exist. Is the path incorrect?", over_path);
+        }
+        over.to_path_buf()
+    } else {
+        find_data_directory()?
+    };
+
 
     // TODO: We should do better error handling here
     // This to enforce we load relative to the current exe
@@ -68,7 +78,7 @@ pub fn core_create() -> *mut Core {
 
     dbg!(&pargs);
 
-    match init_data_directory() {
+    match init_data_directory(&None) {
         Err(e) => {
             error!("Unable to find data directory {:?}", e);
             return std::ptr::null_mut();
