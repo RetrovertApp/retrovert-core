@@ -64,6 +64,10 @@ fn init_data_directory() -> Result<()> {
 
 #[no_mangle]
 pub fn core_create() -> *mut Core {
+    let pargs = pico_args::Arguments::from_env();
+
+    dbg!(&pargs);
+
     match init_data_directory() {
         Err(e) => {
             error!("Unable to find data directory {:?}", e);
@@ -101,13 +105,11 @@ pub fn core_setup_logger(
 }
 
 #[no_mangle]
-pub fn core_show_args() {
-    println!("sotehuso");
+pub extern "C" fn core_show_args() {
     println!("{}", HELP);
 }
 
-const HELP: &str = "\
-  --data-dir    PATH    Override data directory. 
+const HELP: &str = "  --data-dir    PATH    Override data directory. 
   --plugins     PATH    Overide the paths for plugins. Both filenames and directories are supported 
   --play        PATH    Select file(s) to play. Depending on supported sources, urls may be used here as well.
   --randomize           Randomize the files to play if there are more than one.
