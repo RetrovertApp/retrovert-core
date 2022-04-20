@@ -19,6 +19,7 @@ extern "C" {
 }
 
 #[allow(dead_code)]
+#[no_mangle]
 unsafe extern "C" fn rust_log_callback(
     user_data: *const c_void,
     level: crate::LogLevel,
