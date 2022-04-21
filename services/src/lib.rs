@@ -28,7 +28,9 @@ impl PluginService {
     }
 
     pub fn clone_with_log_name(base: &PluginService, log_name: &str) -> PluginService {
-        let base_api: &mut ServiceApi = unsafe { &mut *(base.service_api as *mut ServiceApi) };
+        let base_api_ffi: &mut ServiceFFI = unsafe { &mut *(base.service_api as *mut ServiceFFI) };
+        let base_api: &mut ServiceApi =
+            unsafe { &mut *(base_api_ffi.private_data as *mut ServiceApi) };
 
         let service_api = Box::new(ServiceApi {
             c_io_api: base_api.c_io_api,
