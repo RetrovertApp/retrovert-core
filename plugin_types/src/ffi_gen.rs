@@ -1,9 +1,7 @@
 use services::*;
 use std::borrow::Cow;
 use std::ffi::CStr;
-#[allow(unused)]
 use std::os::raw::{c_char, c_void};
-#[allow(unused)]
 use std::slice;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -71,7 +69,7 @@ pub struct PlaybackPlugin {
     ) -> ReadInfo,
     pub seek: unsafe extern "C" fn(user_data: *mut core::ffi::c_void, ms: i64) -> i64,
     pub metadata: unsafe extern "C" fn(url: *const c_char, services: *const ServiceFFI) -> i32,
-    pub static_init: unsafe extern "C" fn(log: *const LogFFI, services: *const ServiceFFI),
+    pub static_init: unsafe extern "C" fn(services: *const ServiceFFI),
     pub settings_updated: unsafe extern "C" fn(
         user_data: *mut core::ffi::c_void,
         settings: *const SettingsFFI,

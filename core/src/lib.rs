@@ -1,16 +1,44 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use log::{error, trace, LevelFilter, Log, SetLoggerError};
-use std::path::{PathBuf, Path};
+use services::PluginService;
+use std::path::{Path, PathBuf};
 
 pub mod plugin_handler;
+use plugin_handler::Plugins;
+
+#[derive(Default, Debug)]
+pub struct Args {
+    /// Directory path for data
+    pub data_dir: PathBuf,
+    /// Directory path for plugins/and or direct link to plugins. If directory then it will recurse and search
+    pub plugin_paths: Vec<String>,
+    /// file(s)/path(s) to play
+    pub play: Vec<String>,
+    /// Randomize the playing
+    pub randomize: bool,
+}
 
 pub struct Core {
-    pub dummy: u32,
+    pub plugin_service: PluginService,
+    pub plugins: Plugins,
 }
 
 impl Core {
-    pub fn new() -> Core {
-        Core { dummy: 0 }
+    pub fn new(args: &Args) -> Box<Core> {
+        let mut core = Box::new(Core {
+            plugin_service: PluginService::new("core"),
+            plugins: Plugins::default(),
+        });
+
+        dbg!(&args.plugin_paths);
+
+        // Add plugins
+        for path in &args.plugin_paths {
+            core.plugins
+                .add_plugins_from_path(path, &core.plugin_service);
+        }
+
+        core
     }
 
     pub fn update(&mut self) {}
@@ -40,7 +68,7 @@ fn find_data_directory() -> Result<PathBuf> {
     }
 }
 
-fn init_data_directory(datadir_over: &Option<String>) -> Result<()> {
+fn init_data_directory(datadir_over: &Option<String>) -> Result<PathBuf> {
     let current_exe = std::env::current_exe()?;
     std::env::set_current_dir(
         current_exe
@@ -52,15 +80,16 @@ fn init_data_directory(datadir_over: &Option<String>) -> Result<()> {
         let over = Path::new(over_path);
 
         if !over.exists() {
-            bail!("--datadir {} doesn't exist. Is the path incorrect?", over_path);
+            bail!(
+                "--datadir {} doesn't exist. Is the path incorrect?",
+                over_path
+            );
         }
         over.to_path_buf()
     } else {
         find_data_directory()?
     };
 
-
-    // TODO: We should do better error handling here
     // This to enforce we load relative to the current exe
     let current_exe = std::env::current_exe()?;
     std::env::set_current_dir(
@@ -69,24 +98,49 @@ fn init_data_directory(datadir_over: &Option<String>) -> Result<()> {
             .with_context(|| "Unable to get parent directory")?,
     )?;
 
-    Ok(())
+    Ok(datadir)
+}
+
+fn get_dirs_files(args: &mut pico_args::Arguments, opt: &'static str) -> Result<Vec<String>> {
+    let mut output = Vec::new();
+
+    loop {
+        let opt_data: Option<String> = args.opt_value_from_str(opt)?;
+
+        if let Some(data) = opt_data {
+            output.push(data);
+        } else {
+            return Ok(output);
+        }
+    }
+}
+
+//
+fn init_core_create() -> Result<Args> {
+    let mut pargs = pico_args::Arguments::from_env();
+    let datadir_over: Option<String> = pargs.opt_value_from_str("--data-dir").unwrap();
+
+    dbg!(&pargs);
+
+    Ok(Args {
+        data_dir: init_data_directory(&datadir_over)?,
+        plugin_paths: get_dirs_files(&mut pargs, "--plugins")?,
+        play: get_dirs_files(&mut pargs, "--play")?,
+        randomize: pargs.contains("--randomize"),
+    })
 }
 
 #[no_mangle]
 pub fn core_create() -> *mut Core {
-    let pargs = pico_args::Arguments::from_env();
-
-    dbg!(&pargs);
-
-    match init_data_directory(&None) {
+    let args = match init_core_create() {
         Err(e) => {
-            error!("Unable to find data directory {:?}", e);
+            error!("Unable to create core: {:?}", e);
             return std::ptr::null_mut();
         }
-        _ => (),
-    }
+        Ok(args) => args,
+    };
 
-    let core = Box::leak(Box::new(Core::new()));
+    let core = Box::leak(Core::new(&args));
 
     trace!("core create");
     core as *mut Core

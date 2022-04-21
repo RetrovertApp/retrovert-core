@@ -1,17 +1,20 @@
 use anyhow::{bail, Result};
 use cfixed_string::CFixedString;
 use libloading::{Library, Symbol};
-use log::{error, trace};
+use log::{error, info, trace};
 use plugin_types::{PlaybackPlugin, ProbeResult};
-use std::{sync::Arc, time::Duration};
+use services::PluginService;
+//use std::{sync::Arc, time::Duration};
 use walkdir::{DirEntry, WalkDir};
 
 pub struct DecoderPlugin {
     pub plugin: Library,
+    pub service: PluginService,
     pub plugin_path: String,
     pub plugin_funcs: PlaybackPlugin,
 }
 
+#[derive(Default)]
 pub struct Plugins {
     pub decoder_plugins: Vec<Box<DecoderPlugin>>,
 }
@@ -80,7 +83,7 @@ impl Plugins {
         &mut self,
         name: &str,
         plugin: Library,
-        service_api: *const services::ServiceFFI,
+        base_service: &PluginService,
     ) -> Result<bool> {
         let func: Symbol<extern "C" fn() -> *const plugin_types::PlaybackPlugin> =
             unsafe { plugin.get(b"rv_playback_plugin\0")? };
@@ -124,28 +127,23 @@ impl Plugins {
             bail!("Unable to add {} due to \"close\" function missing", name);
         }
 
-        trace!(
-            "Loaded playback plugin {} {}",
-            plugin_funcs.get_name(),
-            plugin_funcs.get_version()
-        );
+        let plugin_name = plugin_funcs.get_name();
+        let version = plugin_funcs.get_version();
+        let full_name = format!("{} {}", plugin_name, version);
 
-        /*
-        if let Some(static_init) = native_plugin.static_init {
-            // TODO: Memory leak
-            let name = format!("{} {}", plugin_funcs.name, plugin_funcs.version);
-            let c_name = CString::new(name).unwrap();
-            let log_api = Box::into_raw(ServiceApi::create_log_api());
+        trace!("Loaded playback plugin {} {}", plugin_name, version);
 
+        let service = PluginService::clone_with_log_name(base_service, &full_name);
+
+        if plugin_funcs.static_init as u64 != 0 {
             unsafe {
-                (*log_api).log_set_base_name.unwrap()((*log_api).priv_data, c_name.as_ptr());
-                (static_init)(log_api, service_api);
+                (plugin_funcs.static_init)(service.get_c_api());
             }
         }
-        */
 
         self.decoder_plugins.push(Box::new(DecoderPlugin {
             plugin,
+            service,
             plugin_path: name.to_owned(),
             plugin_funcs,
         }));
@@ -163,30 +161,21 @@ impl Plugins {
         }
     }
 
-    fn internal_add_plugins_from_path(
-        &mut self,
-        path: &str,
-        service_api: *const services::ServiceFFI,
-    ) {
-        for entry in WalkDir::new(path).max_depth(1) {
+    pub fn add_plugins_from_path(&mut self, path: &str, base_service: &PluginService) {
+        trace!("Searching path {:} for plugins", path);
+        for entry in WalkDir::new(path) {
             if let Ok(t) = entry {
                 if Self::check_file_type(&t) {
-                    self.add_plugin(t.path().to_str().unwrap(), service_api);
-                    //println!("{}", t.path().display());
+                    self.add_plugin(t.path().to_str().unwrap(), base_service);
                 }
             }
         }
     }
 
-    pub fn add_plugins_from_path(&mut self, service_api: *const services::ServiceFFI) {
-        self.internal_add_plugins_from_path("plugins", service_api);
-        self.internal_add_plugins_from_path(".", service_api);
-    }
-
-    pub fn add_plugin(&mut self, name: &str, service_api: *const services::ServiceFFI) {
+    pub fn add_plugin(&mut self, name: &str, base_service: &PluginService) {
         match unsafe { Library::new(name) } {
             Ok(lib) => {
-                if let Err(e) = self.add_plugin_lib(name, lib, service_api) {
+                if let Err(e) = self.add_plugin_lib(name, lib, base_service) {
                     error!("Unable to add {} because of error {:?}", name, e);
                 }
             }
