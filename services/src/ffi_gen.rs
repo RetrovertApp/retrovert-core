@@ -1,6 +1,10 @@
+#[allow(unused)]
 use crate::io::Io;
+#[allow(unused)]
 use crate::log::Log;
+#[allow(unused)]
 use crate::metadata::Metadata;
+#[allow(unused)]
 use crate::settings::Settings;
 use std::borrow::Cow;
 use std::ffi::CStr;
@@ -33,7 +37,7 @@ extern "C" fn io_read_url_to_memory(self_c: *mut c_void, url: *const c_char) -> 
     ret_val
 }
 
-extern "C" fn io_free_url_to_memory(self_c: *mut c_void, memory: *mut core::ffi::c_void) {
+extern "C" fn io_free_url_to_memory(self_c: *mut c_void, memory: *mut c_void) {
     let instance: &mut Io = unsafe { &mut *(self_c as *mut Io) };
     instance.free_url_to_memory(memory)
 }
@@ -45,8 +49,7 @@ pub struct IoFFI {
     pub exists: unsafe extern "C" fn(self_c: *mut c_void, url: *const c_char) -> bool,
     pub read_url_to_memory:
         unsafe extern "C" fn(self_c: *mut c_void, url: *const c_char) -> IoReadUrlResult,
-    pub free_url_to_memory:
-        unsafe extern "C" fn(self_c: *mut c_void, memory: *mut core::ffi::c_void),
+    pub free_url_to_memory: unsafe extern "C" fn(self_c: *mut c_void, memory: *mut c_void),
 }
 
 impl IoFFI {

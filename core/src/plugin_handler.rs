@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use cfixed_string::CFixedString;
 use libloading::{Library, Symbol};
-use log::{error, info, trace};
+use log::{error, trace};
 use plugin_types::{PlaybackPlugin, ProbeResult};
 use services::PluginService;
 //use std::{sync::Arc, time::Duration};
@@ -14,9 +14,17 @@ pub struct DecoderPlugin {
     pub plugin_funcs: PlaybackPlugin,
 }
 
+pub struct OutputPlugin {
+    pub plugin: Library,
+    pub service: PluginService,
+    pub plugin_path: String,
+    pub plugin_funcs: plugin_types::OutputPlugin,
+}
+
 #[derive(Default)]
 pub struct Plugins {
     pub decoder_plugins: Vec<Box<DecoderPlugin>>,
+    pub output_plugins: Vec<Box<OutputPlugin>>,
 }
 
 impl DecoderPlugin {
@@ -72,10 +80,17 @@ pub fn get_plugin_ext() -> &'static str {
     "dll"
 }
 
+#[allow(dead_code)]
+pub type PlaybackReturnStruct = extern "C" fn() -> *const plugin_types::PlaybackPlugin;
+
+#[allow(dead_code)]
+pub type OutputReturnStruct = extern "C" fn() -> *const plugin_types::OutputPlugin;
+
 impl Plugins {
     pub fn new() -> Plugins {
         Plugins {
             decoder_plugins: Vec::new(),
+            output_plugins: Vec::new(),
         }
     }
 
@@ -85,70 +100,75 @@ impl Plugins {
         plugin: Library,
         base_service: &PluginService,
     ) -> Result<bool> {
-        let func: Symbol<extern "C" fn() -> *const plugin_types::PlaybackPlugin> =
-            unsafe { plugin.get(b"rv_playback_plugin\0")? };
+        let playback_func: Result<Symbol<PlaybackReturnStruct>, libloading::Error> =
+            unsafe { plugin.get(b"rv_playback_plugin\0") };
 
-        let plugin_funcs = unsafe { *func() };
+        if let Ok(func) = playback_func {
+            let plugin_funcs = unsafe { *func() };
 
-        if plugin_funcs.probe_can_play as u64 == 0 {
-            bail!(
-                "Unable to add {} due to \"probe_can_play\" function missing",
-                name
-            );
-        }
+            let plugin_name = plugin_funcs.get_name();
+            let version = plugin_funcs.get_version();
+            let full_name = format!("{} {}", plugin_name, version);
 
-        if plugin_funcs.supported_extensions as u64 == 0 {
-            bail!(
-                "Unable to add {} due to \"supported_extensions\" function missing",
-                name
-            );
-        }
+            trace!("Loaded playback plugin {} {}", plugin_name, version);
 
-        if plugin_funcs.create as u64 == 0 {
-            bail!("Unable to add {} due to \"create\" function missing", name);
-        }
+            let service = PluginService::clone_with_log_name(base_service, &full_name);
 
-        if plugin_funcs.destroy as u64 == 0 {
-            bail!("Unable to add {} due to \"destroy\" function missing", name);
-        }
-
-        if plugin_funcs.read_data as u64 == 0 {
-            bail!(
-                "Unable to add {} due to \"read_data\" function missing",
-                name
-            );
-        }
-
-        if plugin_funcs.open as u64 == 0 {
-            bail!("Unable to add {} due to \"open\" function missing", name);
-        }
-
-        if plugin_funcs.close as u64 == 0 {
-            bail!("Unable to add {} due to \"close\" function missing", name);
-        }
-
-        let plugin_name = plugin_funcs.get_name();
-        let version = plugin_funcs.get_version();
-        let full_name = format!("{} {}", plugin_name, version);
-
-        trace!("Loaded playback plugin {} {}", plugin_name, version);
-
-        let service = PluginService::clone_with_log_name(base_service, &full_name);
-
-        if plugin_funcs.static_init as u64 != 0 {
-            unsafe {
-                (plugin_funcs.static_init)(service.get_c_api());
+            if plugin_funcs.static_init as u64 != 0 {
+                unsafe {
+                    (plugin_funcs.static_init)(service.get_c_api());
+                }
             }
+
+            self.decoder_plugins.push(Box::new(DecoderPlugin {
+                plugin,
+                service,
+                plugin_path: name.to_owned(),
+                plugin_funcs,
+            }));
+
+            return Ok(true);
+
+            // return self.add_playback_plugin(name, plugin, func, base_service);
         }
 
-        self.decoder_plugins.push(Box::new(DecoderPlugin {
-            plugin,
-            service,
-            plugin_path: name.to_owned(),
-            plugin_funcs,
-        }));
+        let output_func: Result<Symbol<OutputReturnStruct>, libloading::Error> =
+            unsafe { plugin.get(b"rv_output_plugin\0") };
 
-        Ok(true)
+        if let Ok(func) = output_func {
+            let plugin_funcs = unsafe { *func() };
+
+            let plugin_name = plugin_funcs.get_name();
+            let version = plugin_funcs.get_version();
+            let full_name = format!("{} {}", plugin_name, version);
+
+            trace!("Loaded output plugin {} {}", plugin_name, version);
+
+            let service = PluginService::clone_with_log_name(base_service, &full_name);
+
+            if plugin_funcs.static_init as u64 != 0 {
+                unsafe {
+                    (plugin_funcs.static_init)(service.get_c_api());
+                }
+            }
+
+            if plugin_funcs.create as u64 != 0 {
+                unsafe {
+                    (plugin_funcs.create)(service.get_c_api());
+                }
+            }
+
+            self.output_plugins.push(Box::new(OutputPlugin {
+                plugin,
+                service,
+                plugin_path: name.to_owned(),
+                plugin_funcs,
+            }));
+
+            return Ok(true);
+        }
+
+        bail!("No correct entry point found for plugin {}", name)
     }
 
     fn check_file_type(entry: &DirEntry) -> bool {
