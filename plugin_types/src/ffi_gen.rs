@@ -101,6 +101,13 @@ pub enum OutputType {
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
+pub enum PlaybackType {
+    Tracker = 0,
+    HardwareEmulated = 1,
+    Streamed = 2,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub enum SettingsUpdate {
     Default = 0,
     RequireSongRestart = 1,
@@ -109,12 +116,34 @@ pub enum SettingsUpdate {
 #[derive(Debug, Copy, Clone)]
 pub struct ReadInfo {
     pub sample_rate: u32,
-    pub sample_count: u16,
-    pub channel_count: u8,
-    pub output_format: u8,
+    pub frame_count: u32,
+    pub channel_count: u16,
+    pub virtual_channel_count: u16,
+    pub output_format: u16,
 }
 
 impl ReadInfo {}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ReadData {
+    pub channels_output: *mut c_void,
+    pub virtual_channel_output: *mut c_void,
+    pub channels_output_max_bytes_size: u32,
+    pub virtual_channels_output_max_bytes_size: u32,
+    pub info: ReadInfo,
+}
+
+impl ReadData {}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct PlaybackInfo {
+    pub virtual_channel_count: u32,
+    pub playback_type: PlaybackType,
+}
+
+impl PlaybackInfo {}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -140,12 +169,7 @@ pub struct PlaybackPlugin {
         settings: *const SettingsFFI,
     ) -> i32,
     pub close: unsafe extern "C" fn(user_data: *mut c_void),
-    pub read_data: unsafe extern "C" fn(
-        user_data: *mut c_void,
-        dest: *mut c_void,
-        max_output_bytes: u32,
-        native_sample_rate: u32,
-    ) -> ReadInfo,
+    pub read_data: unsafe extern "C" fn(user_data: *mut c_void, dest: ReadData) -> ReadInfo,
     pub seek: unsafe extern "C" fn(user_data: *mut c_void, ms: i64) -> i64,
     pub metadata: unsafe extern "C" fn(url: *const c_char, services: *const ServiceFFI) -> i32,
     pub static_init: unsafe extern "C" fn(services: *const ServiceFFI),
