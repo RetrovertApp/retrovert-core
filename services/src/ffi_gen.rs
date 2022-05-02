@@ -241,6 +241,7 @@ impl SBase {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SFloat {
+    pub s_base: SBase,
     pub value: f32,
     pub start_range: f32,
     pub end_range: f32,
@@ -251,6 +252,7 @@ impl SFloat {}
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SInteger {
+    pub s_base: SBase,
     pub value: i32,
     pub start_range: i32,
     pub end_range: i32,
@@ -261,6 +263,7 @@ impl SInteger {}
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SBool {
+    pub s_base: SBase,
     pub value: bool,
 }
 
@@ -301,6 +304,7 @@ impl SStringRangeValue {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SIntegerFixedRange {
+    pub s_base: SBase,
     pub value: i32,
     pub values: *const SIntegerRangeValue,
     pub values_size: u64,
@@ -315,6 +319,7 @@ impl SIntegerFixedRange {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct SStringFixedRange {
+    pub s_base: SBase,
     pub value: *const c_char,
     pub values: *const SStringRangeValue,
     pub values_size: u64,
