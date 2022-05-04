@@ -61,30 +61,70 @@ impl Settings {
     }
 
     pub fn get_string(&mut self, _ext: &str, id: &str) -> SStringResult {
-        SStringResult {
-            result: SettingsResult::NotFound,
-            value: ptr::null(),
+        let settings =
+            unsafe { slice::from_raw_parts(self.native_settings, self.native_settings_count) };
+        
+        if let Some(index) = self.find_setting(id) {
+            SStringResult {
+                result: SettingsResult::NotFound,
+                value: settings[index].string_fixed_value.value,
+            }
+        } else {
+            SStringResult {
+                result: SettingsResult::NotFound,
+                value: std::ptr::null(),
+            }
         }
     }
 
-    pub fn get_int(&mut self, _ext: &str, _id: &str) -> SIntResult {
-        SIntResult {
-            result: SettingsResult::NotFound,
-            value: 0,
+    pub fn get_int(&mut self, _ext: &str, id: &str) -> SIntResult {
+        let settings =
+            unsafe { slice::from_raw_parts(self.native_settings, self.native_settings_count) };
+        
+        if let Some(index) = self.find_setting(id) {
+            SIntResult {
+                result: SettingsResult::NotFound,
+                value: settings[index].int_value.value,
+            }
+        } else {
+            SIntResult {
+                result: SettingsResult::NotFound,
+                value: 0,
+            }
         }
     }
 
-    pub fn get_float(&mut self, _ext: &str, _id: &str) -> SFloatResult {
-        SFloatResult {
-            result: SettingsResult::NotFound,
-            value: 0,
+    pub fn get_float(&mut self, _ext: &str, id: &str) -> SFloatResult {
+        let settings =
+            unsafe { slice::from_raw_parts(self.native_settings, self.native_settings_count) };
+        
+        if let Some(index) = self.find_setting(id) {
+            SFloatResult {
+                result: SettingsResult::NotFound,
+                value: settings[index].float_value.value,
+            }
+        } else {
+            SFloatResult {
+                result: SettingsResult::NotFound,
+                value: 0.0,
+            }
         }
     }
 
     pub fn get_bool(&mut self, _ext: &str, _id: &str) -> SBoolResult {
-        SBoolResult {
-            result: SettingsResult::NotFound,
-            value: false,
+        let settings =
+            unsafe { slice::from_raw_parts(self.native_settings, self.native_settings_count) };
+        
+        if let Some(index) = self.find_setting(id) {
+            SBoolResult {
+                result: SettingsResult::NotFound,
+                value: settings[index].bool_value.value,
+            }
+        } else {
+            SBoolResult {
+                result: SettingsResult::NotFound,
+                value: false,
+            }
         }
     }
 
@@ -92,7 +132,7 @@ impl Settings {
         let settings =
             unsafe { slice::from_raw_parts(self.native_settings, self.native_settings_count) };
         for (i, s) in settings.iter().enumerate() {
-            if s.int_value.s_base.widget_id() == id {
+            if s.int_value.s_base.get_widget_id() == id {
                 return Some(i);
             }
         }
