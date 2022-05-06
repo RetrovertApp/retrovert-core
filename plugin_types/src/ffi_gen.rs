@@ -13,6 +13,7 @@ pub enum InputType {
     S32 = 4,
     F32 = 5,
 }
+pub const RV_OUTPUT_PLUGIN_API_VERSION: u64 = 1;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct WriteInfo {
@@ -112,6 +113,7 @@ pub enum SettingsUpdate {
     Default = 0,
     RequireSongRestart = 1,
 }
+pub const RV_PLAYBACK_PLUGIN_API_VERSION: u64 = 1;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ReadInfo {

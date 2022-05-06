@@ -10,6 +10,7 @@ use std::borrow::Cow;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_void};
 use std::slice;
+pub const RV_IO_API_VERSION: u64 = 1;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct IoReadUrlResult {
@@ -72,6 +73,7 @@ pub enum LogLevel {
     Error = 4,
     Fatal = 5,
 }
+pub const RV_LOG_API_VERSION: u64 = 1;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct LogFFI {
@@ -99,6 +101,16 @@ pub enum RVMetadataResult {
     UnableToMakeQuery = 1,
 }
 pub type MetadataId = u64;
+pub const RV_METADATA_API_VERSION: u64 = 1;
+pub const RV_METADATA_TITLE_TAG: &str = "title";
+pub const RV_METADATA_SONGTYPE_TAG: &str = "song_type";
+pub const RV_METADATA_AUTHORINGTOOL_TAG: &str = "authoring_tool";
+pub const RV_METADATA_ARTIST_TAG: &str = "artist";
+pub const RV_METADATA_ALBUM_TAG: &str = "album";
+pub const RV_METADATA_DATE_TAG: &str = "date";
+pub const RV_METADATA_GENRE_TAG: &str = "genre";
+pub const RV_METADATA_MESSAGE_TAG: &str = "message";
+pub const RV_METADATA_LENGTH_TAG: &str = "length";
 extern "C" fn metadata_create_url(self_c: *mut c_void, url: *const c_char) -> MetadataId {
     let instance: &mut Metadata = unsafe { &mut *(self_c as *mut Metadata) };
     let url_ = unsafe { CStr::from_ptr(url) };
@@ -201,9 +213,16 @@ impl MetadataFFI {
 pub enum SettingsResult {
     Ok = 0,
     NotFound = 1,
-    DuplicatedId = 2,
-    WrongType = 3,
+    UnknownId = 2,
+    DuplicatedId = 3,
+    WrongType = 4,
 }
+pub const RVS_FLOAT_TYPE: u64 = 0x1000;
+pub const RVS_INTEGER_TYPE: u64 = 0x1001;
+pub const RVS_BOOL_TYPE: u64 = 0x1002;
+pub const RVS_INTEGER_RANGE_TYPE: u64 = 0x1003;
+pub const RVS_STRING_RANGE_TYPE: u64 = 0x1004;
+pub const RV_SETTINGS_API_VERSION: u64 = 1;
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub union Setting {
@@ -348,7 +367,7 @@ impl SIntResult {}
 #[derive(Debug, Copy, Clone)]
 pub struct SFloatResult {
     pub result: SettingsResult,
-    pub value: i32,
+    pub value: f32,
 }
 
 impl SFloatResult {}
@@ -378,62 +397,86 @@ impl SBoolResult {}
 
 extern "C" fn settings_reg(
     self_c: *mut c_void,
-    name: *const c_char,
+    id: *const c_char,
     settings: *const Setting,
     settings_size: u64,
 ) -> SettingsResult {
     let instance: &mut Settings = unsafe { &mut *(self_c as *mut Settings) };
-    let name_ = unsafe { CStr::from_ptr(name) };
+    let id_ = unsafe { CStr::from_ptr(id) };
     let settings_ = unsafe { slice::from_raw_parts(settings, settings_size as _) };
-    let ret_val = instance.reg(&name_.to_string_lossy(), &settings_);
+    let ret_val = instance.reg(&id_.to_string_lossy(), &settings_);
     ret_val
 }
 
 extern "C" fn settings_get_string(
     self_c: *mut c_void,
+    reg_id: *const c_char,
     ext: *const c_char,
     id: *const c_char,
 ) -> SStringResult {
     let instance: &mut Settings = unsafe { &mut *(self_c as *mut Settings) };
+    let reg_id_ = unsafe { CStr::from_ptr(reg_id) };
     let ext_ = unsafe { CStr::from_ptr(ext) };
     let id_ = unsafe { CStr::from_ptr(id) };
-    let ret_val = instance.get_string(&ext_.to_string_lossy(), &id_.to_string_lossy());
+    let ret_val = instance.get_string(
+        &reg_id_.to_string_lossy(),
+        &ext_.to_string_lossy(),
+        &id_.to_string_lossy(),
+    );
     ret_val
 }
 
 extern "C" fn settings_get_int(
     self_c: *mut c_void,
+    reg_id: *const c_char,
     ext: *const c_char,
     id: *const c_char,
 ) -> SIntResult {
     let instance: &mut Settings = unsafe { &mut *(self_c as *mut Settings) };
+    let reg_id_ = unsafe { CStr::from_ptr(reg_id) };
     let ext_ = unsafe { CStr::from_ptr(ext) };
     let id_ = unsafe { CStr::from_ptr(id) };
-    let ret_val = instance.get_int(&ext_.to_string_lossy(), &id_.to_string_lossy());
+    let ret_val = instance.get_int(
+        &reg_id_.to_string_lossy(),
+        &ext_.to_string_lossy(),
+        &id_.to_string_lossy(),
+    );
     ret_val
 }
 
 extern "C" fn settings_get_float(
     self_c: *mut c_void,
+    reg_id: *const c_char,
     ext: *const c_char,
     id: *const c_char,
 ) -> SFloatResult {
     let instance: &mut Settings = unsafe { &mut *(self_c as *mut Settings) };
+    let reg_id_ = unsafe { CStr::from_ptr(reg_id) };
     let ext_ = unsafe { CStr::from_ptr(ext) };
     let id_ = unsafe { CStr::from_ptr(id) };
-    let ret_val = instance.get_float(&ext_.to_string_lossy(), &id_.to_string_lossy());
+    let ret_val = instance.get_float(
+        &reg_id_.to_string_lossy(),
+        &ext_.to_string_lossy(),
+        &id_.to_string_lossy(),
+    );
     ret_val
 }
 
 extern "C" fn settings_get_bool(
     self_c: *mut c_void,
+    reg_id: *const c_char,
     ext: *const c_char,
     id: *const c_char,
 ) -> SBoolResult {
     let instance: &mut Settings = unsafe { &mut *(self_c as *mut Settings) };
+    let reg_id_ = unsafe { CStr::from_ptr(reg_id) };
     let ext_ = unsafe { CStr::from_ptr(ext) };
     let id_ = unsafe { CStr::from_ptr(id) };
-    let ret_val = instance.get_bool(&ext_.to_string_lossy(), &id_.to_string_lossy());
+    let ret_val = instance.get_bool(
+        &reg_id_.to_string_lossy(),
+        &ext_.to_string_lossy(),
+        &id_.to_string_lossy(),
+    );
     ret_val
 }
 
@@ -443,27 +486,31 @@ pub struct SettingsFFI {
     pub private_data: *mut c_void,
     pub reg: unsafe extern "C" fn(
         self_c: *mut c_void,
-        name: *const c_char,
+        id: *const c_char,
         settings: *const Setting,
         settings_size: u64,
     ) -> SettingsResult,
     pub get_string: unsafe extern "C" fn(
         self_c: *mut c_void,
+        reg_id: *const c_char,
         ext: *const c_char,
         id: *const c_char,
     ) -> SStringResult,
     pub get_int: unsafe extern "C" fn(
         self_c: *mut c_void,
+        reg_id: *const c_char,
         ext: *const c_char,
         id: *const c_char,
     ) -> SIntResult,
     pub get_float: unsafe extern "C" fn(
         self_c: *mut c_void,
+        reg_id: *const c_char,
         ext: *const c_char,
         id: *const c_char,
     ) -> SFloatResult,
     pub get_bool: unsafe extern "C" fn(
         self_c: *mut c_void,
+        reg_id: *const c_char,
         ext: *const c_char,
         id: *const c_char,
     ) -> SBoolResult,
