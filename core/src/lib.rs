@@ -3,6 +3,8 @@ use log::{error, trace, LevelFilter, Log, SetLoggerError};
 use services::PluginService;
 use std::path::{Path, PathBuf};
 
+pub mod output;
+pub mod playback;
 pub mod plugin_handler;
 use plugin_handler::Plugins;
 
@@ -55,7 +57,7 @@ fn find_data_directory() -> Result<PathBuf> {
 
     let mut path = current_path
         .parent()
-        .with_context(|| format!("Unable to get parent dir"))?;
+        .with_context(||"Unable to get parent dir")?;
 
     loop {
         trace!("seaching for data in {:?}", path);
@@ -146,15 +148,21 @@ pub fn core_create() -> *mut Core {
     core as *mut Core
 }
 
+/// # Safety
+///
+/// Foobar
 #[no_mangle]
-pub fn core_destroy(core: *mut Core, _prepare_reload: bool) {
-    let _ = unsafe { Box::from_raw(core) };
+pub unsafe fn core_destroy(core: *mut Core, _prepare_reload: bool) {
+    let _ = Box::from_raw(core);
     trace!("core destroy");
 }
 
+/// # Safety
+///
+/// Foobar
 #[no_mangle]
-pub fn core_update(core: *mut Core) {
-    let core: &mut Core = unsafe { &mut *core };
+pub unsafe fn core_update(core: *mut Core) {
+    let core: &mut Core = &mut *core;
     trace!("created update");
     core.update();
 }

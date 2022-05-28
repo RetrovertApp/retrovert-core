@@ -395,6 +395,7 @@ pub struct SBoolResult {
 
 impl SBoolResult {}
 
+
 extern "C" fn settings_reg(
     self_c: *mut c_void,
     id: *const c_char,
@@ -404,7 +405,7 @@ extern "C" fn settings_reg(
     let instance: &mut Settings = unsafe { &mut *(self_c as *mut Settings) };
     let id_ = unsafe { CStr::from_ptr(id) };
     let settings_ = unsafe { slice::from_raw_parts(settings, settings_size as _) };
-    let ret_val = instance.reg(&id_.to_string_lossy(), &settings_);
+    let ret_val = instance.reg(&id_.to_string_lossy(), settings_);
     ret_val
 }
 

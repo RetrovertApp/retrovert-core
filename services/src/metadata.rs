@@ -23,3 +23,9 @@ impl Metadata {
 
     pub fn add_instrument(&mut self, _parent_id: MetadataId, _text: &str) {}
 }
+
+impl Default for Metadata {
+    fn default() -> Self {
+        Self::new()
+    }
+}

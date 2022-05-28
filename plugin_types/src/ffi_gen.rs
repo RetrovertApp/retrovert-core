@@ -102,6 +102,14 @@ pub enum OutputType {
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
+pub enum ReadStatus {
+    DecodingRequest = 0,
+    Ok = 1,
+    Finished = 2,
+    Error = 3,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub enum PlaybackType {
     Tracker = 0,
     HardwareEmulated = 1,
@@ -119,9 +127,10 @@ pub const RV_PLAYBACK_PLUGIN_API_VERSION: u64 = 1;
 pub struct ReadInfo {
     pub sample_rate: u32,
     pub frame_count: u32,
-    pub channel_count: u16,
+    pub status: ReadStatus,
     pub virtual_channel_count: u16,
-    pub output_format: u16,
+    pub channel_count: u8,
+    pub output_format: u8,
 }
 
 impl ReadInfo {}

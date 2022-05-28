@@ -25,3 +25,9 @@ impl Io {
 
     pub fn free_url_to_memory(&mut self, _data: *const c_void) {}
 }
+
+impl Default for Io {
+    fn default() -> Self {
+        Self::new()
+    }
+}

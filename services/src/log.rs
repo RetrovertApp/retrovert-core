@@ -89,8 +89,11 @@ impl Log {
         Box::leak(c_api)
     }
 
-    pub fn free_c_api(log: *mut crate::LogFFI) {
-        let c_log = unsafe { Box::from_raw(log) };
-        let _ = unsafe { Box::from_raw(c_log.private_data as *mut Log) };
+    /// # Safety
+    ///
+    /// Foobar
+    pub unsafe fn free_c_api(log: *mut crate::LogFFI) {
+        let c_log = Box::from_raw(log);
+        let _ = Box::from_raw(c_log.private_data as *mut Log);
     }
 }

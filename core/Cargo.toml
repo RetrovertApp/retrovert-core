@@ -21,3 +21,4 @@ pico-args = "0.4"
 
 toml = "0.5"
 serde = { version = "1.0", features = ["derive"] }
+crossbeam-channel = "0.5"

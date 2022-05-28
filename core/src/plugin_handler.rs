@@ -65,21 +65,6 @@ impl DecoderPlugin {
     */
 }
 
-#[cfg(target_os = "macos")]
-pub fn get_plugin_ext() -> &'static str {
-    "dylib"
-}
-
-#[cfg(target_os = "linux")]
-pub fn get_plugin_ext() -> &'static str {
-    "so"
-}
-
-#[cfg(target_os = "windows")]
-pub fn get_plugin_ext() -> &'static str {
-    "dll"
-}
-
 #[allow(dead_code)]
 pub type PlaybackReturnStruct = extern "C" fn() -> *const plugin_types::PlaybackPlugin;
 
@@ -114,7 +99,7 @@ impl Plugins {
 
             let service = PluginService::clone_with_log_name(base_service, &full_name);
 
-            if plugin_funcs.static_init as u64 != 0 {
+            if plugin_funcs.static_init as usize != 0 {
                 unsafe {
                     (plugin_funcs.static_init)(service.get_c_api());
                 }
@@ -146,13 +131,13 @@ impl Plugins {
 
             let service = PluginService::clone_with_log_name(base_service, &full_name);
 
-            if plugin_funcs.static_init as u64 != 0 {
+            if plugin_funcs.static_init as usize != 0 {
                 unsafe {
                     (plugin_funcs.static_init)(service.get_c_api());
                 }
             }
 
-            if plugin_funcs.create as u64 != 0 {
+            if plugin_funcs.create as usize != 0 {
                 unsafe {
                     (plugin_funcs.create)(service.get_c_api());
                 }
@@ -175,7 +160,7 @@ impl Plugins {
         let path = entry.path();
 
         if let Some(ext) = path.extension() {
-            ext == get_plugin_ext()
+            ext == "rvp"
         } else {
             false
         }
@@ -183,11 +168,9 @@ impl Plugins {
 
     pub fn add_plugins_from_path(&mut self, path: &str, base_service: &PluginService) {
         trace!("Searching path {:} for plugins", path);
-        for entry in WalkDir::new(path) {
-            if let Ok(t) = entry {
-                if Self::check_file_type(&t) {
-                    self.add_plugin(t.path().to_str().unwrap(), base_service);
-                }
+        for entry in WalkDir::new(path).into_iter().flatten() {
+            if Self::check_file_type(&entry) {
+                self.add_plugin(entry.path().to_str().unwrap(), base_service);
             }
         }
     }

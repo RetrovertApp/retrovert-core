@@ -1,19 +1,18 @@
 use crate::ffi_gen::*;
 use anyhow::Result;
 use log::{debug, info, warn};
-use toml;
 use serde::{Deserialize, Serialize};
 use std::{
-    os::raw::c_char,
-    mem, 
-    collections::HashMap, 
-    ptr, 
-    slice, 
-    fs::File, 
-    ffi::CStr, 
-    path::PathBuf, 
+    collections::HashMap,
+    ffi::CStr,
+    fs::File,
     io::{Read, Write},
+    mem,
+    os::raw::c_char,
+    path::Path,
+    ptr, slice,
 };
+use toml;
 
 #[derive(Clone, Serialize, Deserialize)]
 enum SerValue {
@@ -68,12 +67,8 @@ impl NativeSettings {
         debug!("Serializing settings");
 
         let mut ser_settings = Vec::new();
-        let native_settings = unsafe {
-            slice::from_raw_parts(
-                self.native_settings,
-                self.native_settings_count,
-            )
-        };
+        let native_settings =
+            unsafe { slice::from_raw_parts(self.native_settings, self.native_settings_count) };
 
         let bytes_size = std::mem::size_of::<Setting>();
 
@@ -106,7 +101,10 @@ impl NativeSettings {
                             SerSetting::new(&id, SerValue::StrValue(value.to_string()))
                         }
                         t => {
-                            warn!("Setting id {} unknown {}", t, s.int_fixed_value.s_base.widget_type);
+                            warn!(
+                                "Setting id {} unknown {}",
+                                t, s.int_fixed_value.s_base.widget_type
+                            );
                             SerSetting::new("", SerValue::NoSetting)
                         }
                     }
@@ -124,7 +122,7 @@ impl NativeSettings {
         let mut file = File::create(&path)?;
 
         let toml = toml::to_string(&ser_data)?;
-        file.write(toml.as_bytes())?;
+        file.write_all(toml.as_bytes())?;
 
         Ok(())
     }
@@ -156,7 +154,7 @@ impl NativeSettings {
             let sel_name = sel.to_string_lossy();
 
             if sel_name == name {
-            	return v.value;
+                return v.value;
             }
         }
 
@@ -165,10 +163,7 @@ impl NativeSettings {
 
     fn patch_data(&mut self, input_data: &[SerSetting]) {
         let data = unsafe {
-            slice::from_raw_parts_mut(
-                self.native_settings as *mut _,
-                self.native_settings_count,
-            )
+            slice::from_raw_parts_mut(self.native_settings as *mut _, self.native_settings_count)
         };
 
         for input in input_data {
@@ -178,7 +173,7 @@ impl NativeSettings {
                     SerValue::IntValue(v) => wd.int_value.value = v,
                     SerValue::BoolValue(v) => wd.bool_value.value = v,
                     SerValue::StrValue(ref v) => {
-                        wd.string_fixed_value.value = Self::get_string_range_value(wd, &v)
+                        wd.string_fixed_value.value = Self::get_string_range_value(wd, v)
                     }
                     SerValue::NoSetting => (),
                 }
@@ -189,7 +184,7 @@ impl NativeSettings {
     }
 
     fn load_internal(&mut self, path: &str) -> Result<()> {
-        if !std::fs::metadata(path).is_ok() {
+        if std::fs::metadata(path).is_err() {
             return Ok(());
         }
 
@@ -201,19 +196,18 @@ impl NativeSettings {
         Ok(())
     }
 
-    pub fn load(&mut self, path: &PathBuf, filename: &str) -> Result<()> {
+    pub fn load(&mut self, path: &Path, filename: &str) -> Result<()> {
         let dir = path.join(filename);
         self.load_internal(&dir.to_string_lossy())?;
         Ok(())
     }
 
-    pub fn write(&self, path: &PathBuf, filename: &str) -> Result<()> {
+    pub fn write(&self, path: &Path, filename: &str) -> Result<()> {
         let dir = path.join(filename);
         self.write_internal(&dir.to_string_lossy())?;
         Ok(())
     }
 }
-
 
 impl Settings {
     pub fn new() -> Settings {
@@ -227,7 +221,8 @@ impl Settings {
             info!("Trying to register settings for {} twice, skipping", name);
             SettingsResult::DuplicatedId
         } else {
-            self.settings.insert(name.to_owned(), NativeSettings::new(settings));
+            self.settings
+                .insert(name.to_owned(), NativeSettings::new(settings));
             SettingsResult::Ok
         }
     }
@@ -245,7 +240,12 @@ impl Settings {
     pub fn get_string(&mut self, reg_id: &str, _ext: &str, id: &str) -> SStringResult {
         let s = match self.find_reg_settings(reg_id) {
             Some(s) => s,
-            None => return SStringResult { result: SettingsResult::UnknownId, value: ptr::null() },
+            None => {
+                return SStringResult {
+                    result: SettingsResult::UnknownId,
+                    value: ptr::null(),
+                }
+            }
         };
 
         if let Some(setting) = Self::find_setting(id, s) {
@@ -264,7 +264,12 @@ impl Settings {
     pub fn get_int(&mut self, reg_id: &str, _ext: &str, id: &str) -> SIntResult {
         let s = match self.find_reg_settings(reg_id) {
             Some(s) => s,
-            None => return SIntResult { result: SettingsResult::UnknownId, value: 0 },
+            None => {
+                return SIntResult {
+                    result: SettingsResult::UnknownId,
+                    value: 0,
+                }
+            }
         };
 
         if let Some(setting) = Self::find_setting(id, s) {
@@ -283,7 +288,12 @@ impl Settings {
     pub fn get_float(&mut self, reg_id: &str, _ext: &str, id: &str) -> SFloatResult {
         let s = match self.find_reg_settings(reg_id) {
             Some(s) => s,
-            None => return SFloatResult { result: SettingsResult::UnknownId, value: 0.0 },
+            None => {
+                return SFloatResult {
+                    result: SettingsResult::UnknownId,
+                    value: 0.0,
+                }
+            }
         };
 
         if let Some(setting) = Self::find_setting(id, s) {
@@ -302,7 +312,12 @@ impl Settings {
     pub fn get_bool(&mut self, reg_id: &str, _ext: &str, id: &str) -> SBoolResult {
         let s = match self.find_reg_settings(reg_id) {
             Some(s) => s,
-            None => return SBoolResult { result: SettingsResult::UnknownId, value: false },
+            None => {
+                return SBoolResult {
+                    result: SettingsResult::UnknownId,
+                    value: false,
+                }
+            }
         };
 
         if let Some(setting) = Self::find_setting(id, s) {
@@ -326,5 +341,11 @@ impl Settings {
         }
 
         None
+    }
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self::new()
     }
 }
