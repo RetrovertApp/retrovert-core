@@ -5,14 +5,23 @@ use std::os::raw::{c_char, c_void};
 use std::slice;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub enum InputType {
-    Unknown = 0,
+pub enum AudioStreamFormat {
     U8 = 1,
     S16 = 2,
     S24 = 3,
     S32 = 4,
     F32 = 5,
 }
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct AudioFormat {
+    pub audio_format: AudioStreamFormat,
+    pub channel_count: u32,
+    pub sample_rate: u32,
+}
+
+impl AudioFormat {}
+
 pub const RV_OUTPUT_PLUGIN_API_VERSION: u64 = 1;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -32,9 +41,7 @@ pub struct PlaybackCallback {
     pub callback: unsafe extern "C" fn(
         user_data: *mut c_void,
         data: *mut c_void,
-        sample_rate: u32,
-        channels: u32,
-        format: u32,
+        format: AudioFormat,
         frames: u32,
     ),
 }
@@ -93,15 +100,6 @@ pub enum ProbeResult {
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
-pub enum OutputType {
-    U8 = 1,
-    S16 = 2,
-    S24 = 3,
-    S32 = 4,
-    F32 = 5,
-}
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
 pub enum ReadStatus {
     DecodingRequest = 0,
     Ok = 1,
@@ -114,12 +112,6 @@ pub enum PlaybackType {
     Tracker = 0,
     HardwareEmulated = 1,
     Streamed = 2,
-}
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub enum SettingsUpdate {
-    Default = 0,
-    RequireSongRestart = 1,
 }
 pub const RV_PLAYBACK_PLUGIN_API_VERSION: u64 = 1;
 #[repr(C)]
@@ -191,6 +183,56 @@ pub struct PlaybackPlugin {
 }
 
 impl PlaybackPlugin {
+    pub fn get_name(&self) -> Cow<str> {
+        let t = unsafe { CStr::from_ptr(self.name) };
+        t.to_string_lossy()
+    }
+    pub fn get_version(&self) -> Cow<str> {
+        let t = unsafe { CStr::from_ptr(self.version) };
+        t.to_string_lossy()
+    }
+    pub fn get_library_version(&self) -> Cow<str> {
+        let t = unsafe { CStr::from_ptr(self.library_version) };
+        t.to_string_lossy()
+    }
+}
+
+pub const RV_RESAMPLE_PLUGIN_API_VERSION: u64 = 1;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ConvertConfig {
+    pub input: AudioFormat,
+    pub output: AudioFormat,
+}
+
+impl ConvertConfig {}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ResamplePlugin {
+    pub api_version: u64,
+    pub name: *const c_char,
+    pub version: *const c_char,
+    pub library_version: *const c_char,
+    pub create: unsafe extern "C" fn(services: *const ServiceFFI) -> *mut c_void,
+    pub destroy: unsafe extern "C" fn(user_data: *mut c_void) -> i32,
+    pub set_config: unsafe extern "C" fn(user_data: *mut c_void, format: *const ConvertConfig),
+    pub convert: unsafe extern "C" fn(
+        user_data: *mut c_void,
+        output_data: *mut c_void,
+        input_data: *mut c_void,
+        input_frame_count: u32,
+    ) -> u32,
+    pub get_expected_output_frame_count:
+        unsafe extern "C" fn(user_data: *mut c_void, frame_count: u32) -> u32,
+    pub static_init: unsafe extern "C" fn(services: *const ServiceFFI),
+    pub settings_updated: unsafe extern "C" fn(
+        user_data: *mut c_void,
+        settings: *const SettingsFFI,
+    ) -> SettingsUpdate,
+}
+
+impl ResamplePlugin {
     pub fn get_name(&self) -> Cow<str> {
         let t = unsafe { CStr::from_ptr(self.name) };
         t.to_string_lossy()

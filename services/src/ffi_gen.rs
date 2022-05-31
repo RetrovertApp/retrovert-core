@@ -217,6 +217,12 @@ pub enum SettingsResult {
     DuplicatedId = 3,
     WrongType = 4,
 }
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub enum SettingsUpdate {
+    Default = 0,
+    RequireRestart = 1,
+}
 pub const RVS_FLOAT_TYPE: u64 = 0x1000;
 pub const RVS_INTEGER_TYPE: u64 = 0x1001;
 pub const RVS_BOOL_TYPE: u64 = 0x1002;
@@ -394,7 +400,6 @@ pub struct SBoolResult {
 }
 
 impl SBoolResult {}
-
 
 extern "C" fn settings_reg(
     self_c: *mut c_void,
