@@ -2,16 +2,16 @@ use anyhow::{bail, Result};
 use cfixed_string::CFixedString;
 use libloading::{Library, Symbol};
 use log::{error, trace};
-use plugin_types::{PlaybackPlugin, ProbeResult};
+use plugin_types::{ProbeResult};
 use services::PluginService;
 //use std::{sync::Arc, time::Duration};
 use walkdir::{DirEntry, WalkDir};
 
-pub struct DecoderPlugin {
+pub struct PlaybackPlugin {
     pub plugin: Library,
     pub service: PluginService,
     pub plugin_path: String,
-    pub plugin_funcs: PlaybackPlugin,
+    pub plugin_funcs: plugin_types::PlaybackPlugin,
 }
 
 pub struct OutputPlugin {
@@ -21,13 +21,21 @@ pub struct OutputPlugin {
     pub plugin_funcs: plugin_types::OutputPlugin,
 }
 
-#[derive(Default)]
-pub struct Plugins {
-    pub decoder_plugins: Vec<Box<DecoderPlugin>>,
-    pub output_plugins: Vec<Box<OutputPlugin>>,
+pub struct ResamplePlugin {
+    pub plugin: Library,
+    pub service: PluginService,
+    pub plugin_path: String,
+    pub plugin_funcs: plugin_types::ResamplePlugin,
 }
 
-impl DecoderPlugin {
+#[derive(Default)]
+pub struct Plugins {
+    pub decoder_plugins: Vec<Box<PlaybackPlugin>>,
+    pub output_plugins: Vec<Box<OutputPlugin>>,
+    pub resample_plugins: Vec<Box<ResamplePlugin>>,
+}
+
+impl PlaybackPlugin {
     pub fn probe_can_play(
         &self,
         data: &[u8],
@@ -71,11 +79,49 @@ pub type PlaybackReturnStruct = extern "C" fn() -> *const plugin_types::Playback
 #[allow(dead_code)]
 pub type OutputReturnStruct = extern "C" fn() -> *const plugin_types::OutputPlugin;
 
+macro_rules! add_plugin {
+    ($plugins:expr, $plugin:expr, $base_service:expr, $name:expr, $type_name:expr, $entry_point:expr,$plugin_type:ident)=>{
+        {
+        let playback_func: Result<Symbol<extern "C" fn() -> *const plugin_types::$plugin_type>, libloading::Error> =
+            unsafe { $plugin.get($entry_point) };
+
+        if let Ok(func) = playback_func {
+            let plugin_funcs = unsafe { *func() };
+
+            let plugin_name = plugin_funcs.get_name();
+            let version = plugin_funcs.get_version();
+            let full_name = format!("{} {}", plugin_name, version);
+
+            trace!("Loaded {} plugin {} {}", $type_name, plugin_name, version);
+
+            let service = PluginService::clone_with_log_name($base_service, &full_name);
+
+            if plugin_funcs.static_init as usize != 0 {
+                unsafe {
+                    (plugin_funcs.static_init)(service.get_c_api());
+                }
+            }
+
+            $plugins.push(Box::new($plugin_type {
+                plugin: $plugin,
+                service,
+                plugin_path: $name.to_owned(),
+                plugin_funcs,
+            }));
+
+            return Ok(true);
+        }
+        }
+    }
+}
+
+
 impl Plugins {
     pub fn new() -> Plugins {
         Plugins {
             decoder_plugins: Vec::new(),
             output_plugins: Vec::new(),
+            resample_plugins: Vec::new(),
         }
     }
 
@@ -85,74 +131,9 @@ impl Plugins {
         plugin: Library,
         base_service: &PluginService,
     ) -> Result<bool> {
-        let playback_func: Result<Symbol<PlaybackReturnStruct>, libloading::Error> =
-            unsafe { plugin.get(b"rv_playback_plugin\0") };
-
-        if let Ok(func) = playback_func {
-            let plugin_funcs = unsafe { *func() };
-
-            let plugin_name = plugin_funcs.get_name();
-            let version = plugin_funcs.get_version();
-            let full_name = format!("{} {}", plugin_name, version);
-
-            trace!("Loaded playback plugin {} {}", plugin_name, version);
-
-            let service = PluginService::clone_with_log_name(base_service, &full_name);
-
-            if plugin_funcs.static_init as usize != 0 {
-                unsafe {
-                    (plugin_funcs.static_init)(service.get_c_api());
-                }
-            }
-
-            self.decoder_plugins.push(Box::new(DecoderPlugin {
-                plugin,
-                service,
-                plugin_path: name.to_owned(),
-                plugin_funcs,
-            }));
-
-            return Ok(true);
-
-            // return self.add_playback_plugin(name, plugin, func, base_service);
-        }
-
-        let output_func: Result<Symbol<OutputReturnStruct>, libloading::Error> =
-            unsafe { plugin.get(b"rv_output_plugin\0") };
-
-        if let Ok(func) = output_func {
-            let plugin_funcs = unsafe { *func() };
-
-            let plugin_name = plugin_funcs.get_name();
-            let version = plugin_funcs.get_version();
-            let full_name = format!("{} {}", plugin_name, version);
-
-            trace!("Loaded output plugin {} {}", plugin_name, version);
-
-            let service = PluginService::clone_with_log_name(base_service, &full_name);
-
-            if plugin_funcs.static_init as usize != 0 {
-                unsafe {
-                    (plugin_funcs.static_init)(service.get_c_api());
-                }
-            }
-
-            if plugin_funcs.create as usize != 0 {
-                unsafe {
-                    (plugin_funcs.create)(service.get_c_api());
-                }
-            }
-
-            self.output_plugins.push(Box::new(OutputPlugin {
-                plugin,
-                service,
-                plugin_path: name.to_owned(),
-                plugin_funcs,
-            }));
-
-            return Ok(true);
-        }
-
+        add_plugin!(self.decoder_plugins, plugin, base_service, name, "playback", b"rv_playback_plugin\0", PlaybackPlugin);
+        add_plugin!(self.output_plugins, plugin, base_service, name, "output", b"rv_output_plugin\0", OutputPlugin);
+        add_plugin!(self.resample_plugins, plugin, base_service, name, "resample", b"rv_resample_plugin\0", ResamplePlugin);
         bail!("No correct entry point found for plugin {}", name)
     }
 
