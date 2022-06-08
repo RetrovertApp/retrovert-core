@@ -5,7 +5,7 @@ use plugin_types::{
     AudioStreamFormat, 
     ReadData, 
     ReadInfo, 
-    ReadStatus
+    ReadStatus, ConvertConfig
 };
 use crossbeam_channel::{Sender, unbounded};
 use log::{error, trace};
@@ -37,7 +37,7 @@ impl PlaybackSettings {
 const TEMP_BUFFER_SIZE: usize = 48000 * 4 * 2;
 const DEFAULT_AUDIO_FORMAT: AudioFormat = AudioFormat {
     audio_format: AudioStreamFormat::F32,
-    channel_count: 2,
+    channel_count: 1,
     sample_rate: 48000,
 };
 
@@ -74,7 +74,6 @@ pub struct PlaybackInternal {
     /// Resampler when reading data from plugins 
     pub plugin_resampler: ResamplePluginInstance, 
     /// Temporary buffer used when requesting data from a player plugin
-    //settings: PlaybackSettings,
     temp_gen: Vec<u8>,
     temp_resample: Vec<u8>,
     /// Ring buffer for audio output
@@ -163,10 +162,10 @@ impl PlaybackInternal {
 
 // Send back data to the requester if possible
 fn get_data(state: &mut PlaybackInternal, format: AudioFormat, frames: usize, msg: &Sender<PlaybackReply>) {
-    if format != DEFAULT_AUDIO_FORMAT {
-        error!("Currently only supporting default format");
-        msg.send(PlaybackReply::InvalidRequest).unwrap();
-        return;
+    // Update format if it differs
+    if state.last_request_format != format {
+        let config = ConvertConfig { input: DEFAULT_AUDIO_FORMAT, output: format };
+        unsafe { (state.output_resampler.plugin.set_config)(state.output_resampler.user_data, &config) };
     }
 
     if state.read_index == state.write_index && state.read_generation == state.write_generation {
@@ -181,24 +180,64 @@ fn get_data(state: &mut PlaybackInternal, format: AudioFormat, frames: usize, ms
 
     // TODO: Uninit
     let mut dest = vec![0u8; byte_size].into_boxed_slice();
+
     let read_index = state.read_index;
 
-    trace!("Requesting data {}:{} - {}:{}", 
-        state.read_index, state.read_generation,
-        state.write_index, state.write_generation);
+    // if format differs from the default format we need to convert it
+    if format != DEFAULT_AUDIO_FORMAT {
+        trace!("converting from {:?} -> {:?}", DEFAULT_AUDIO_FORMAT, format);
 
-    if read_index + byte_size < ring_buffer_len {
-        dest.copy_from_slice(&state.ring_buffer[read_index..read_index + byte_size]);
-        state.read_index += byte_size;
+        let required_input_frames = unsafe { 
+            (state.output_resampler.plugin.get_required_input_frame_count)(state.output_resampler.user_data, frames as _) 
+        };
+
+        let bytes_size = get_byte_size_format(format, required_input_frames as _);
+
+        // if read are within the ring-buffer range we can just convert directly from it to the output
+        if read_index + bytes_size < ring_buffer_len {
+            unsafe {
+                (state.output_resampler.plugin.convert)(state.output_resampler.user_data, 
+                    dest.as_mut_ptr() as _, 
+                    state.ring_buffer[read_index..].as_mut_ptr() as _, 
+                    frames as _);
+            }
+            state.read_index += bytes_size;
+        } else {
+            let rem_count = state.ring_buffer[read_index..].len();
+            let rest_count = byte_size - rem_count; 
+            // if we need to wrap the ring-buffer we need to copy the data in two parts to a temp buffer
+            // and then run the convert pass from that data
+            state.temp_resample[0..rem_count].copy_from_slice(&state.ring_buffer[read_index..]);
+            state.temp_resample[rem_count..byte_size].copy_from_slice(&state.ring_buffer[0..rest_count]);
+
+            unsafe {
+                (state.output_resampler.plugin.convert)(state.output_resampler.user_data, 
+                    dest.as_mut_ptr() as _, 
+                    state.ring_buffer[read_index..].as_mut_ptr() as _, 
+                    frames as _);
+            }
+
+            state.read_index = rest_count;
+            state.read_generation = state.read_generation.wrapping_add(1);
+        }
+
     } else {
-        let rem_count = state.ring_buffer[read_index..].len();
-        let rest_count = byte_size - rem_count; 
-        trace!("rem_count {} rest_count {} (byte_size {})", rem_count, rest_count, byte_size);
-        // if we need to wrap the ring-buffer we need to copy the data in two parts
-        dest[0..rem_count].copy_from_slice(&state.ring_buffer[read_index..]);
-        dest[rem_count..byte_size].copy_from_slice(&state.ring_buffer[0..rest_count]);
-        state.read_index = rest_count;
-        state.read_generation = state.read_generation.wrapping_add(1);
+        trace!("Requesting data {}:{} - {}:{}", 
+            state.read_index, state.read_generation,
+            state.write_index, state.write_generation);
+
+        if read_index + byte_size < ring_buffer_len {
+            dest.copy_from_slice(&state.ring_buffer[read_index..read_index + byte_size]);
+            state.read_index += byte_size;
+        } else {
+            let rem_count = state.ring_buffer[read_index..].len();
+            let rest_count = byte_size - rem_count; 
+            // if we need to wrap the ring-buffer we need to copy the data in two parts
+            dest[0..rem_count].copy_from_slice(&state.ring_buffer[read_index..]);
+            dest[rem_count..byte_size].copy_from_slice(&state.ring_buffer[0..rest_count]);
+            state.read_index = rest_count;
+            state.read_generation = state.read_generation.wrapping_add(1);
+        }
     }
 
     msg.send(PlaybackReply::Data(dest)).unwrap();
@@ -238,7 +277,7 @@ fn update(state: &mut PlaybackInternal) -> bool {
     // TODO: Use configured audio format
     // TODO: Fix hard-coded frames-count
     let read_info = ReadInfo {
-        format: DEFAULT_AUDIO_FORMAT,
+        format: state.internal_format,
         frame_count: 1024,
         status: ReadStatus::DecodingRequest,
         virtual_channel_count: 0,
@@ -258,7 +297,7 @@ fn update(state: &mut PlaybackInternal) -> bool {
     trace!("write_index {}:{}", state.write_index, state.write_generation);
 
     // can just copy the data to the ringbuffer
-    if info.format == DEFAULT_AUDIO_FORMAT {
+    if info.format == state.internal_format {
         let byte_size = get_byte_size_format(info.format, info.frame_count as _);
         let write_index = state.write_index;
         // if read index + size is smaller than the ring buffer size we can just copy the range into the ring buffer
