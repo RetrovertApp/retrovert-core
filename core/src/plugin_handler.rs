@@ -4,8 +4,9 @@ use libloading::{Library, Symbol};
 use log::{error, trace};
 use plugin_types::{ProbeResult};
 use services::PluginService;
-//use std::{sync::Arc, time::Duration};
+use std::{sync::Arc};
 use walkdir::{DirEntry, WalkDir};
+use parking_lot::RwLock;
 
 pub struct PlaybackPlugin {
     pub plugin: Library,
@@ -28,11 +29,15 @@ pub struct ResamplePlugin {
     pub plugin_funcs: plugin_types::ResamplePlugin,
 }
 
+pub type PlaybackPlugins = Arc<RwLock<Vec<Box<PlaybackPlugin>>>>;
+pub type OutputPlugins = Arc<RwLock<Vec<Box<OutputPlugin>>>>;
+pub type ResamplePlugins = Arc<RwLock<Vec<Box<ResamplePlugin>>>>;
+
 #[derive(Default)]
 pub struct Plugins {
-    pub decoder_plugins: Vec<Box<PlaybackPlugin>>,
-    pub output_plugins: Vec<Box<OutputPlugin>>,
-    pub resample_plugins: Vec<Box<ResamplePlugin>>,
+    pub decoder_plugins: PlaybackPlugins,
+    pub output_plugins: OutputPlugins,
+    pub resample_plugins: ResamplePlugins,
 }
 
 impl PlaybackPlugin {
@@ -60,6 +65,7 @@ impl PlaybackPlugin {
         }
     }
 
+
     /*
     pub fn get_metadata(&self, filename: &str, service: &PluginService) {
         let c_filename = CFixedString::from_str(filename);
@@ -72,12 +78,6 @@ impl PlaybackPlugin {
     }
     */
 }
-
-#[allow(dead_code)]
-pub type PlaybackReturnStruct = extern "C" fn() -> *const plugin_types::PlaybackPlugin;
-
-#[allow(dead_code)]
-pub type OutputReturnStruct = extern "C" fn() -> *const plugin_types::OutputPlugin;
 
 macro_rules! add_plugin {
     ($plugins:expr, $plugin:expr, $base_service:expr, $name:expr, $type_name:expr, $entry_point:expr,$plugin_type:ident)=>{
@@ -102,7 +102,10 @@ macro_rules! add_plugin {
                 }
             }
 
-            $plugins.push(Box::new($plugin_type {
+            // TODO: Fix unwrap
+            let mut p = $plugins.write();
+
+            p.push(Box::new($plugin_type {
                 plugin: $plugin,
                 service,
                 plugin_path: $name.to_owned(),
@@ -119,9 +122,9 @@ macro_rules! add_plugin {
 impl Plugins {
     pub fn new() -> Plugins {
         Plugins {
-            decoder_plugins: Vec::new(),
-            output_plugins: Vec::new(),
-            resample_plugins: Vec::new(),
+            decoder_plugins: Arc::new(RwLock::new(Vec::new())),
+            output_plugins: Arc::new(RwLock::new(Vec::new())),
+            resample_plugins: Arc::new(RwLock::new(Vec::new())),
         }
     }
 

@@ -64,7 +64,7 @@ impl IoFFI {
     }
 }
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum LogLevel {
     Trace = 0,
     Debug = 1,
@@ -89,13 +89,13 @@ pub struct LogFFI {
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum MetaEncoding {
     Utf8 = 0,
     ShiftJS2 = 1,
 }
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum RVMetadataResult {
     KeyNotFound = 0,
     UnableToMakeQuery = 1,
@@ -209,7 +209,7 @@ impl MetadataFFI {
     }
 }
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum SettingsResult {
     Ok = 0,
     NotFound = 1,
@@ -218,7 +218,7 @@ pub enum SettingsResult {
     WrongType = 4,
 }
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum SettingsUpdate {
     Default = 0,
     RequireRestart = 1,

@@ -2,11 +2,20 @@ use anyhow::{bail, Context, Result};
 use log::{error, trace, LevelFilter, Log, SetLoggerError};
 use services::PluginService;
 use std::path::{Path, PathBuf};
+use std::ffi::CStr;
+use vfs::Vfs;
+use std::os::raw::c_char;
 
 pub mod output;
 pub mod playback;
 pub mod plugin_handler;
+pub mod playlist;
+
 use plugin_handler::Plugins;
+use playlist::Playlist;
+use playback::Playback;
+use output::Output;
+
 
 #[derive(Default, Debug)]
 pub struct Args {
@@ -23,27 +32,47 @@ pub struct Args {
 pub struct Core {
     pub plugin_service: PluginService,
     pub plugins: Plugins,
+    pub playlist: Playlist,
+    pub vfs: Vfs,
+    pub output: Output,
 }
 
 impl Core {
     pub fn new(args: &Args) -> Box<Core> {
-        let mut core = Box::new(Core {
-            plugin_service: PluginService::new("core"),
-            plugins: Plugins::default(),
-        });
+        // TODO: Fix unwraps
+        let plugin_service = PluginService::new("core");
+        let mut plugins = Plugins::default();
+        let vfs = Vfs::new();
 
         dbg!(&args.plugin_paths);
 
         // Add plugins
         for path in &args.plugin_paths {
-            core.plugins
-                .add_plugins_from_path(path, &core.plugin_service);
+            plugins.add_plugins_from_path(path, &plugin_service);
         }
 
-        core
+        let playback = Playback::new(plugins.resample_plugins.clone()).unwrap();
+        let playlist = Playlist::new(&vfs, &playback, plugins.decoder_plugins.clone()).unwrap();
+        let mut output = Output::new(&playback, plugins.output_plugins.clone());
+
+        output.create_default_output();
+
+        Box::new(Core {
+            plugin_service,
+            plugins,
+            vfs,
+            playlist,
+            output,
+        })
     }
 
-    pub fn update(&mut self) {}
+    pub fn load_url(&mut self, url: &str) {
+        self.playlist.play_url(url);
+    }
+
+    pub fn update(&mut self) {
+        //self.pla
+    }
 }
 
 /// Finds the data directory relative to the executable.
@@ -163,8 +192,17 @@ pub unsafe fn core_destroy(core: *mut Core, _prepare_reload: bool) {
 #[no_mangle]
 pub unsafe fn core_update(core: *mut Core) {
     let core: &mut Core = &mut *core;
-    trace!("created update");
     core.update();
+}
+
+/// # Safety
+///
+/// Foobar
+#[no_mangle]
+pub unsafe fn core_load_url(core: *mut Core, url: *const c_char) {
+    let core: &mut Core = &mut *core;
+    let name = CStr::from_ptr(url);
+    core.load_url(&name.to_string_lossy());
 }
 
 #[no_mangle]

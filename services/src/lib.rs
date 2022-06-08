@@ -5,6 +5,10 @@ pub mod metadata;
 pub mod settings;
 pub use ffi_gen::*;
 
+// It's not safe to pass pointers to other therads, so we use this to get around it
+unsafe impl Sync for PluginService {}
+unsafe impl Send for PluginService {}
+
 pub struct PluginService {
     service_api: *const ServiceFFI,
 }
@@ -48,6 +52,13 @@ impl PluginService {
     pub fn get_c_api(&self) -> *const ServiceFFI {
         self.service_api
     }
+
+    pub fn get_settings_c_api(&self) {
+
+    }
+
+
+
 }
 
 impl Drop for PluginService {

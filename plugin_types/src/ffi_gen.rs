@@ -4,7 +4,7 @@ use std::ffi::CStr;
 use std::os::raw::{c_char, c_void};
 use std::slice;
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum AudioStreamFormat {
     U8 = 1,
     S16 = 2,
@@ -13,7 +13,7 @@ pub enum AudioStreamFormat {
     F32 = 5,
 }
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct AudioFormat {
     pub audio_format: AudioStreamFormat,
     pub channel_count: u32,
@@ -92,14 +92,14 @@ impl OutputPlugin {
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ProbeResult {
     Supported = 0,
     Unsupported = 1,
     Unsure = 2,
 }
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ReadStatus {
     DecodingRequest = 0,
     Ok = 1,
@@ -107,7 +107,7 @@ pub enum ReadStatus {
     Error = 3,
 }
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum PlaybackType {
     Tracker = 0,
     HardwareEmulated = 1,
@@ -117,12 +117,10 @@ pub const RV_PLAYBACK_PLUGIN_API_VERSION: u64 = 1;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ReadInfo {
-    pub sample_rate: u32,
+    pub format: AudioFormat,
     pub frame_count: u32,
     pub status: ReadStatus,
     pub virtual_channel_count: u16,
-    pub channel_count: u8,
-    pub output_format: u8,
 }
 
 impl ReadInfo {}
@@ -171,6 +169,13 @@ pub struct PlaybackPlugin {
         subsong: u32,
         settings: *const SettingsFFI,
     ) -> i32,
+    pub open_from_memory: unsafe extern "C" fn(
+        user_data: *mut c_void,
+        data: *const u8,
+        data_size: u64,
+        subsong: u32,
+        settings: *const SettingsFFI,
+    ) -> i32,
     pub close: unsafe extern "C" fn(user_data: *mut c_void),
     pub read_data: unsafe extern "C" fn(user_data: *mut c_void, dest: ReadData) -> ReadInfo,
     pub seek: unsafe extern "C" fn(user_data: *mut c_void, ms: i64) -> i64,
@@ -181,6 +186,9 @@ pub struct PlaybackPlugin {
         settings: *const SettingsFFI,
     ) -> SettingsUpdate,
 }
+
+unsafe impl Sync for PlaybackPlugin {}
+unsafe impl Send for PlaybackPlugin {}
 
 impl PlaybackPlugin {
     pub fn get_name(&self) -> Cow<str> {
@@ -225,12 +233,17 @@ pub struct ResamplePlugin {
     ) -> u32,
     pub get_expected_output_frame_count:
         unsafe extern "C" fn(user_data: *mut c_void, frame_count: u32) -> u32,
+    pub get_required_input_frame_count:
+        unsafe extern "C" fn(user_data: *mut c_void, frame_count: u32) -> u32,
     pub static_init: unsafe extern "C" fn(services: *const ServiceFFI),
     pub settings_updated: unsafe extern "C" fn(
         user_data: *mut c_void,
         settings: *const SettingsFFI,
     ) -> SettingsUpdate,
 }
+
+unsafe impl Sync for ResamplePlugin {}
+unsafe impl Send for ResamplePlugin {}
 
 impl ResamplePlugin {
     pub fn get_name(&self) -> Cow<str> {

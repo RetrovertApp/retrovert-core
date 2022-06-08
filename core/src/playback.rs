@@ -1,24 +1,353 @@
-use plugin_types::PlaybackPlugin;
-use std::sync::Mutex;
+use plugin_types::{
+    PlaybackPlugin, 
+    ResamplePlugin,
+    AudioFormat, 
+    AudioStreamFormat, 
+    ReadData, 
+    ReadInfo, 
+    ReadStatus
+};
+use crossbeam_channel::{Sender, unbounded};
+use log::{error, trace};
+use anyhow::{Result, bail};
+use std::{
+    ptr,
+    thread,
+    os::raw::c_void,
+};
+
+use crate::plugin_handler::ResamplePlugins;
+
+#[derive(Default)]
+pub struct PlaybackSettings {
+    /// How many ms to pre-buffer
+    pub buffer_len_ms: usize,
+    /// Max CPU load in percent on the decoder thread
+    pub max_cpu_load: usize,
+}
+
+impl PlaybackSettings {
+    fn new() -> PlaybackSettings {
+        // 2000 ms of buffering and approx max 90% cpu load
+        PlaybackSettings { buffer_len_ms: 2000, max_cpu_load: 90 }
+    }
+}
+
+// Temp buffer size is 1 sec of audio data for 2 channels floats
+const TEMP_BUFFER_SIZE: usize = 48000 * 4 * 2;
+const DEFAULT_AUDIO_FORMAT: AudioFormat = AudioFormat {
+    audio_format: AudioStreamFormat::F32,
+    channel_count: 2,
+    sample_rate: 48000,
+};
+
+unsafe impl Sync for PlaybackPluginInstance {}
+unsafe impl Send for PlaybackPluginInstance {}
+unsafe impl Sync for ResamplePluginInstance {}
+unsafe impl Send for ResamplePluginInstance {}
+
+#[derive(Clone, Debug)]
+pub struct Playback {
+    pub channel: Sender<PlaybackMessage>,
+} 
+
 
 #[derive(Clone)]
-pub struct PluginPlayback {
-    _plugin_user_data: u64,
+pub struct PlaybackPluginInstance {
+    pub user_data: *mut c_void,
     pub plugin: PlaybackPlugin,
-    _is_paused: bool,
 }
 
+#[derive(Clone)]
+pub struct ResamplePluginInstance {
+    pub user_data: *mut c_void,
+    pub plugin: ResamplePlugin,
+}
+
+
+pub struct PlaybackInternal {
+    pub players: Vec<PlaybackPluginInstance>,
+    /// List of all resample plugins
+    pub resample_plugins: ResamplePlugins,
+    /// Used for generating data to requests
+    pub output_resampler: ResamplePluginInstance,
+    /// Resampler when reading data from plugins 
+    pub plugin_resampler: ResamplePluginInstance, 
+    /// Temporary buffer used when requesting data from a player plugin
+    //settings: PlaybackSettings,
+    temp_gen: Vec<u8>,
+    temp_resample: Vec<u8>,
+    /// Ring buffer for audio output
+    ring_buffer: Vec<u8>,
+    read_index: usize,
+    write_index: usize,
+    write_generation: u32,
+    read_generation: u32,
+    // Format used for the internal ring-buffer
+    internal_format: AudioFormat,
+    /// Format used for the get_data requester.
+    /// TODO: Keep a cache of these?
+    last_request_format: AudioFormat,
+}
+
+pub enum PlaybackMessage {
+    QueuePlayback(PlaybackPluginInstance),
+    GetData(plugin_types::AudioFormat, usize, Sender<PlaybackReply>)
+}
+
+pub enum PlaybackReply {
+    /// This reply can happen if the decoder thread hasn't generated enough data.
+    OutOfData,
+    /// Generated if the request is invalid (i.e too large size etc) 
+    InvalidRequest,
+    /// This will happen if no data has been generated yet 
+    NoData,
+    /// Returns data back to the requster
+    Data(Box<[u8]>),
+}
+
+impl PlaybackInternal {
+    fn new(resample_plugins: ResamplePlugins) -> Result<PlaybackInternal> {
+        let output_resampler = Self::create_default_resample_plugin(&resample_plugins)?;
+        let plugin_resampler = Self::create_default_resample_plugin(&resample_plugins)?;
+
+        // TODO: Should be passed in
+        //let settings = PlaybackSettings::new();
+        let ring_buffer_size = get_byte_size_format(DEFAULT_AUDIO_FORMAT, DEFAULT_AUDIO_FORMAT.sample_rate as usize * 2);
+        Ok(PlaybackInternal { 
+            //settings,
+            // 2 sec of buffering for now
+            ring_buffer: vec![0u8; ring_buffer_size],
+            temp_gen: vec![0u8; TEMP_BUFFER_SIZE],
+            temp_resample: vec![0u8; TEMP_BUFFER_SIZE],
+            players: Vec::new(),
+            resample_plugins,
+            output_resampler,
+            plugin_resampler,
+            read_index: 0,
+            write_index: 0,
+            read_generation: 0,
+            write_generation: 0,
+            internal_format: DEFAULT_AUDIO_FORMAT,
+            last_request_format: DEFAULT_AUDIO_FORMAT, 
+        })
+    }
+
+    fn create_default_resample_plugin(resample_plugis: &ResamplePlugins) -> Result<ResamplePluginInstance> {
+        let resample_plugins = resample_plugis.read();
+
+        if resample_plugins.is_empty() {
+            bail!("No resample plugin(s) found. Unable to setup Retrovert playback");
+        }
+
+        let op = &resample_plugins[0];
+
+        let plugin_name = op.plugin_funcs.get_name();
+        let service_funcs = op.service.get_c_api();
+        let user_data = unsafe { ((op.plugin_funcs).create)(service_funcs) };
+
+        if user_data.is_null() {
+            bail!("{} : unable to allocate instance", plugin_name);
+        }
+
+        let config = plugin_types::ConvertConfig { input: DEFAULT_AUDIO_FORMAT, output: DEFAULT_AUDIO_FORMAT };
+
+        unsafe { (op.plugin_funcs.set_config)(user_data, &config); }
+
+        trace!("Created default resample plugin: {}", plugin_name);
+
+        Ok(ResamplePluginInstance { user_data, plugin: op.plugin_funcs })
+    }
+
+}
+
+// Send back data to the requester if possible
+fn get_data(state: &mut PlaybackInternal, format: AudioFormat, frames: usize, msg: &Sender<PlaybackReply>) {
+    if format != DEFAULT_AUDIO_FORMAT {
+        error!("Currently only supporting default format");
+        msg.send(PlaybackReply::InvalidRequest).unwrap();
+        return;
+    }
+
+    if state.read_index == state.write_index && state.read_generation == state.write_generation {
+        msg.send(PlaybackReply::NoData).unwrap();
+        return;
+    }
+
+
+    // TODO: Verify that that requested size is reasonable
+    let byte_size = get_byte_size_format(format, frames);
+    let ring_buffer_len = state.ring_buffer.len(); 
+
+    // TODO: Uninit
+    let mut dest = vec![0u8; byte_size].into_boxed_slice();
+    let read_index = state.read_index;
+
+    trace!("Requesting data {}:{} - {}:{}", 
+        state.read_index, state.read_generation,
+        state.write_index, state.write_generation);
+
+    if read_index + byte_size < ring_buffer_len {
+        dest.copy_from_slice(&state.ring_buffer[read_index..read_index + byte_size]);
+        state.read_index += byte_size;
+    } else {
+        let rem_count = state.ring_buffer[read_index..].len();
+        let rest_count = byte_size - rem_count; 
+        trace!("rem_count {} rest_count {} (byte_size {})", rem_count, rest_count, byte_size);
+        // if we need to wrap the ring-buffer we need to copy the data in two parts
+        dest[0..rem_count].copy_from_slice(&state.ring_buffer[read_index..]);
+        dest[rem_count..byte_size].copy_from_slice(&state.ring_buffer[0..rest_count]);
+        state.read_index = rest_count;
+        state.read_generation = state.read_generation.wrapping_add(1);
+    }
+
+    msg.send(PlaybackReply::Data(dest)).unwrap();
+} 
+
+/// Handles incoming messages (usually from the main thread)
+fn incoming_msg(state: &mut PlaybackInternal, msg: &PlaybackMessage) {
+    match msg {
+        // TODO: Implement
+        PlaybackMessage::QueuePlayback(playback) => {
+            state.players.push(playback.clone());
+        },
+
+        PlaybackMessage::GetData(format, frames, msg) => {
+            get_data(state, *format, *frames, msg);
+        }
+    }
+}
+
+fn update(state: &mut PlaybackInternal) -> bool {
+    if state.players.is_empty() {
+        return true;
+    }
+
+    // get the read offset adjusted w
+    let gen = state.write_generation - state.read_generation;
+    let write_index = state.read_index + state.ring_buffer.len() * gen as usize;
+
+    // if write index is larger than read_index + half the size of the ring buffer we don't  generate any more data 
+    if write_index > (state.read_index + state.ring_buffer.len() / 2) {
+        //trace!("Write is twice as large as read index, no extra data generated");
+        return true;
+    }
+
+    let player = &state.players[0];
+
+    // TODO: Use configured audio format
+    // TODO: Fix hard-coded frames-count
+    let read_info = ReadInfo {
+        format: DEFAULT_AUDIO_FORMAT,
+        frame_count: 1024,
+        status: ReadStatus::DecodingRequest,
+        virtual_channel_count: 0,
+    };
+
+    let read_data = ReadData {
+        channels_output: state.temp_gen.as_mut_ptr() as _,
+        virtual_channel_output: ptr::null_mut(),
+        channels_output_max_bytes_size: state.temp_gen.len() as _,
+        virtual_channels_output_max_bytes_size: 0,
+        info: read_info,
+    };
+
+    let info = unsafe { (player.plugin.read_data)(player.user_data, read_data) };
+    let ring_buffer_len = state.ring_buffer.len(); 
+
+    trace!("write_index {}:{}", state.write_index, state.write_generation);
+
+    // can just copy the data to the ringbuffer
+    if info.format == DEFAULT_AUDIO_FORMAT {
+        let byte_size = get_byte_size_format(info.format, info.frame_count as _);
+        let write_index = state.write_index;
+        // if read index + size is smaller than the ring buffer size we can just copy the range into the ring buffer
+        if write_index + byte_size < ring_buffer_len {
+            state.ring_buffer[write_index..write_index + byte_size].copy_from_slice(&state.temp_gen[0..byte_size]);
+            state.write_index += byte_size;
+        } else {
+            let rem_count = state.ring_buffer[write_index..].len();
+            let rest_count = byte_size - rem_count; 
+            // if we need to wrap the ring-buffer we need to copy the data in two parts
+            state.ring_buffer[write_index..].copy_from_slice(&state.temp_gen[..rem_count]);
+            state.ring_buffer[0..rest_count].copy_from_slice(&state.temp_gen[rem_count..byte_size]);
+            state.write_index = rest_count;
+            state.write_generation = state.write_generation.wrapping_add(1);
+        }
+
+        // sanity check that ring-buffer read isn't larger than write read
+        if state.read_index >= state.write_index && state.read_generation == state.write_generation {
+            error!("ring-buffer read is ahead of write (read: {} write: {})", state.read_index, state.write_index);
+        }
+
+    } else {
+        todo!("This needs to be implemented!");
+    }
+
+    false
+}
+
+impl Playback {
+    pub fn new(resample_plugins: ResamplePlugins) -> Result<Playback> {
+        let (channel, thread_recv) = unbounded::<PlaybackMessage>();
+
+        let mut state = PlaybackInternal::new(resample_plugins)?;
+
+        trace!("Playback create");
+
+        // Setup worker thread
+        thread::Builder::new()
+            .name("playback".to_string())
+            .spawn(move || {
+                loop {
+                    if let Ok(msg) = thread_recv.try_recv() {
+                        incoming_msg(&mut state, &msg);
+                    }
+
+                    if update(&mut state) {
+                        thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                }
+            })?;
+
+        trace!("Playback create: done");
+
+        Ok(Playback { channel })
+    }
+
+
+}
+
+
+/*
 pub struct Playback {
-    pub players: Vec<PluginPlayback>,
+    /// for sending messages to the main-thread
+    main_send: crossbeam_channel::Sender<PlaySendMsg>,
 }
 
-pub struct DataCallback {
-    pub playback: Mutex<Playback>,
-    _mix_buffer: Vec<u8>,
-    _temp_gen: Vec<u8>,
-    _read_index: usize,
-    _frames_decoded: usize,
+
+
+pub fn start_playback_thread() {
+    let (data_send, thread_rec) = unbounded::<SendMsg>();
+
+    // Setup worker thread
+    thread::Builder::new()
+        .name("playback".to_string())
+        .spawn(move || {
+            let mut state = VfsState::new();
+
+            while let Ok(msg) = thread_recv.recv() {
+                handle_msg(&mut state, "vfs_worker", &msg);
+            }
+        })
+        .unwrap();
+
+    Vfs { main_send }
 }
+*/
+
+
+
 
 /*
 #[inline]
@@ -974,3 +1303,16 @@ impl Plugins {
 
 
 */
+
+pub fn get_byte_size_format(format: AudioFormat, frames: usize) -> usize {
+    let stream_size = match format.audio_format {
+        AudioStreamFormat::U8 => 1,
+        AudioStreamFormat::S16 => 2,
+        AudioStreamFormat::S24 => 3,
+        AudioStreamFormat::S32 => 4,
+        AudioStreamFormat::F32 => 4,
+    };
+
+    stream_size * format.channel_count as usize * frames
+}
+
