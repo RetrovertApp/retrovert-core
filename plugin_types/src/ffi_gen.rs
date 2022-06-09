@@ -43,7 +43,7 @@ pub struct PlaybackCallback {
         data: *mut c_void,
         format: AudioFormat,
         frames: u32,
-    ),
+    ) -> u32,
 }
 
 impl PlaybackCallback {}

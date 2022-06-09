@@ -7,16 +7,14 @@ use crate::plugin_handler::{OutputPlugins};
 
 // This is called from output plugins. The purpose of it is that it will fetch data from the decoder thread.
 // We use a separate thread for decoding as it makes it possible to buffer more data and to detect buffer underflow
-unsafe extern "C" fn output_callback(user_data: *mut c_void, output_data: *mut c_void, format: AudioFormat, frames: u32) {
+unsafe extern "C" fn output_callback(user_data: *mut c_void, output_data: *mut c_void, format: AudioFormat, frames: u32) -> u32 {
     let callback: &mut OutputCallback = &mut *(user_data as *mut OutputCallback);
-
-    trace!("requesting data {:?} : {frames}", format);
 
     let (playback_send, self_recv) = bounded::<PlaybackReply>(1);
 
     if callback.channel.send(PlaybackMessage::GetData(format, frames as _, playback_send)).is_err() {
         error!("Unable to communitate with playback, no data will be generated");
-        return;
+        return 0;
     }
 
     match self_recv.recv() {
@@ -24,12 +22,15 @@ unsafe extern "C" fn output_callback(user_data: *mut c_void, output_data: *mut c
             let total_size = crate::playback::get_byte_size_format(format, frames as usize);
             let output = std::slice::from_raw_parts_mut(output_data as *mut u8, total_size);
             output.copy_from_slice(&data);
+            return frames;
         }
-        Ok(PlaybackReply::NoData) => trace!("No data has been geretade yet"),
+        Ok(PlaybackReply::NoData) => trace!("No data has been generated yet"),
         Ok(PlaybackReply::InvalidRequest) => error!("Invalid request. No data was generated"),
         Ok(PlaybackReply::OutOfData) => error!("Ran out of data (likel requesting too fast/plaback is too slow. No data will be generated)"),
         Err(e) => error!("Got error when reading from playback {:?} No data will be generated.", e),
     }
+
+    return 0;
 }
 
 #[derive(Clone)]
