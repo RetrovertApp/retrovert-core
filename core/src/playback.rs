@@ -229,7 +229,7 @@ fn get_data(state: &mut PlaybackInternal, format: AudioFormat, frames: usize, ms
                 (state.output_resampler.plugin.convert)(state.output_resampler.user_data, 
                     dest.as_mut_ptr() as _, 
                     state.ring_buffer[read_index..].as_mut_ptr() as _, 
-                    frames as _);
+                    required_input_frames as _);
             }
             state.read_index.add(bytes_size);
         } else {
@@ -245,7 +245,7 @@ fn get_data(state: &mut PlaybackInternal, format: AudioFormat, frames: usize, ms
                 (state.output_resampler.plugin.convert)(state.output_resampler.user_data, 
                     dest.as_mut_ptr() as _, 
                     state.temp_resample.as_mut_ptr() as _, 
-                    frames as _);
+                    required_input_frames as _);
             }
 
             state.read_index.set(rest_count);
