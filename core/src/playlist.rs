@@ -153,7 +153,7 @@ fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: Box<[u8]>
             }
 
             // TODO: Fix settings
-            let c_name = CFixedString::from_str(&filename);
+            //let c_name = CFixedString::from_str(&filename);
             let open_state = unsafe { ((player.plugin_funcs).open_from_memory)(user_data, data.as_ptr(), data.len() as _, 0, ptr::null()) };
 
             if open_state < 0 {
@@ -172,7 +172,8 @@ fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: Box<[u8]>
 
 fn update(state: &mut PlaylistInternal) {
     // Process loading in progress
-    for i in 0..state.inprogress.len() {
+    let mut i = 0;
+    while i < state.inprogress.len() {
         let handle = &state.inprogress[i];
 
         match handle.vfs_handle.recv.try_recv() {
@@ -183,6 +184,7 @@ fn update(state: &mut PlaylistInternal) {
 
             Ok(VfsRecvMsg::ReadDone(data)) => {
                 let name = handle.url.to_owned();
+                trace!("Got data back from vfs (size {})", data.len());
                 find_playback_plugin(state, &name, data);
                 state.inprogress.remove(i);
             }
@@ -194,6 +196,12 @@ fn update(state: &mut PlaylistInternal) {
             */
             _  => (),
         }
+
+        if state.inprogress.len() >= i {
+            break;
+        }
+
+        i += 1;
     }
 }
 
