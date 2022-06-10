@@ -192,11 +192,10 @@ fn get_data(state: &mut PlaybackInternal, format: AudioFormat, frames: usize, ms
         state.last_request_format = format;
     }
 
-    if state.read_index == state.write_index {
+    if state.read_index >= state.write_index {
         msg.send(PlaybackReply::NoData).unwrap();
         return;
     }
-
 
     // TODO: Verify that that requested size is reasonable
     let output_bytes_size = get_byte_size_format(format, frames);
@@ -290,22 +289,13 @@ fn update(state: &mut PlaybackInternal) -> bool {
     // get the read offset adjusted w
     let write_index = state.write_index.value; 
 
+    // TODO: Fix this code, it's really ugly
     let read_cmp = if (state.read_index.get() + ring_size / 2) > ring_size {
         let diff = (state.read_index.get() + ring_size / 2) - ring_size; 
         (state.read_index.value + (1 << 32u64)) & 0xffff_ffff_0000_0000 | diff as u64
     } else {
         state.read_index.value + ring_size as u64 / 2
     };
-
-    /*
-    trace!("cmp  read {:x}:{:x} write {:x}:{:x}",
-        read_cmp >> 32, read_cmp & 0x0000_0000_ffff_ffff,
-        write_index >> 32, write_index & 0x0000_0000_ffff_ffff);
-    */
-
-    //trace!("real read {:x}:{:x} write {:x}:{:x}",
-    //    state.read_index.value >> 32, state.read_index.value & 0x0000_0000_ffff_ffff,
-    //  write_index >> 32, write_index & 0x0000_0000_ffff_ffff);
 
     // if write index is larger than read_index + half the size of the ring buffer we don't  generate any more data 
     if write_index > read_cmp {
@@ -362,6 +352,12 @@ fn update(state: &mut PlaybackInternal) -> bool {
 
     } else {
         todo!("This needs to be implemented!");
+    }
+
+    // info check if we have finished reading from this plugin and if that is the case we will close it and remove it from the player list
+    if info.status == ReadStatus::Finished {
+        unsafe { (player.plugin.destroy)(player.user_data) };
+        state.players.remove(0);
     }
 
     false
