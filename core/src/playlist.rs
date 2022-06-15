@@ -52,17 +52,14 @@ pub(crate) struct VfsHandle {
     pub(crate) vfs_handle: vfs::Handle,
     // Message to send back to main thread
     pub(crate) ret_msg: Option<crossbeam_channel::Sender<PlaylistReply>>,
-    // This is the action to take after the load has finished
-    pub(crate) action: ActionAfterLoad,
 }
 
 impl VfsHandle {
-    fn new(url: &str, vfs_handle: vfs::Handle, ret_msg: Option<crossbeam_channel::Sender<PlaylistReply>>, action: ActionAfterLoad) -> VfsHandle {
+    fn new(url: &str, vfs: &Vfs, ret_msg: Option<crossbeam_channel::Sender<PlaylistReply>>) -> VfsHandle {
         VfsHandle {
             url: url.to_owned(),
-            vfs_handle,
+            vfs_handle: vfs.load_url(url),
             ret_msg,
-            action
         }
     }
 }
@@ -150,9 +147,8 @@ fn incoming_msg(state: &mut PlaylistInternal, msg: &PlaylistMessage) {
             state.mode = Mode::Randomize;
             state.randomize_base_dir = url.to_owned();
             trace!("Playlist: adding {} to vfs", url);
-            let vfs_handle = state.vfs.load_url(url);
-            state.inprogress.push(VfsHandle::new(url, vfs_handle, Some(ret_msg.clone()), ActionAfterLoad::Play));
-        },
+            state.inprogress.push(VfsHandle::new(url, &state.vfs, Some(ret_msg.clone())));
+        }
     }
 }
 
@@ -204,12 +200,29 @@ fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: Box<[u8]>
     false
 }
 
+fn get_next_song(state: &mut PlaylistInternal, prev_index: Option<usize>) {
+    if state.mode == Mode::Randomize {
+        if state.randomize_base_dir.is_empty() {
+            return;
+        }
+
+        // randomize from base dir
+        if let Some(prev_index) = prev_index {
+            state.inprogress[prev_index] = VfsHandle::new(&state.randomize_base_dir, &state.vfs, None);
+        } else {
+            info!("Pushing {} to load", state.randomize_base_dir);
+            state.inprogress.push(VfsHandle::new(&state.randomize_base_dir, &state.vfs, None));
+        }
+    }
+}
+
 /// Handles when a directory gets recived as reponse when loading a url
-fn update_directory(state: &mut PlaylistInternal, files_dirs: FilesDirs, rng: &mut ThreadRng, progress_index: usize) {
+fn update_get_directory(state: &mut PlaylistInternal, files_dirs: FilesDirs, rng: &mut ThreadRng, progress_index: usize) {
     match state.mode {
         Mode::Randomize => {
-            // total number of entries
-            let total_len = files_dirs.files.len() + files_dirs.dirs.len(); 
+            let dirs_len = files_dirs.dirs.len();
+            let files_len = files_dirs.files.len(); 
+            let total_len = dirs_len + files_len; 
             // if we don't have any files we check if we randomized over n number of tries without finding anything
             // to play. At that point we stop trying and should report it back to the user (currently we just log)
             if total_len == 0 {
@@ -218,14 +231,43 @@ fn update_directory(state: &mut PlaylistInternal, files_dirs: FilesDirs, rng: &m
                 if state.missed_randomize_tries >= 10 {
                     info!("Tried to randomize {} tries without finding anything playable. Stopping", 10);
                     state.mode = Mode::Default;
+                    state.inprogress.swap_remove(progress_index);
                     return;
                 }
+
+                // if we couldn't find anything in the current directory we re-randomize from the base path
+                // TODO: Fix ret message
+                state.inprogress[progress_index] = VfsHandle::new(&state.randomize_base_dir, &state.vfs, None);
+                return;
             }
+
+            let entry = rng.gen_range(0..total_len);
+            let url = if entry < dirs_len {
+                &files_dirs.dirs[entry]
+            } else {
+                &files_dirs.files[entry - dirs_len]
+            };
+
+            let path = Path::new(&state.inprogress[progress_index].url).join(url);
+            let p = path.to_string_lossy();
+            state.inprogress[progress_index] = VfsHandle::new(&p, &state.vfs, None);
 
             state.missed_randomize_tries = 0;
         }
 
         Mode::NextSong | Mode::Default => (),
+    }
+}
+
+fn update_get_read_done(state: &mut PlaylistInternal, data: Box<[u8]>, progress_index: usize) {
+    trace!("Got data back from vfs (size {})", data.len());
+    let url = state.inprogress[progress_index].url.to_owned();
+    // if we managed to find a player for the file we will remove it, otherwise if get a text song
+    if find_playback_plugin(state, &url, data) {
+        state.inprogress.remove(progress_index);
+    } else {
+        trace!("Unable to find player for {} trying to find next song", &url);
+        get_next_song(state, Some(progress_index));
     }
 }
 
@@ -238,7 +280,7 @@ fn update(state: &mut PlaylistInternal, rng: &mut ThreadRng) {
     while i < state.inprogress.len() {
         let handle = &state.inprogress[i];
 
-        trace!("state name {} : {}", i, handle.url);
+        //trace!("state name {} : {}", i, handle.url);
 
         match handle.vfs_handle.recv.try_recv() {
             Ok(VfsRecvMsg::Error(err)) => {
@@ -246,47 +288,17 @@ fn update(state: &mut PlaylistInternal, rng: &mut ThreadRng) {
                 state.inprogress.remove(i);
             }
 
-            Ok(VfsRecvMsg::Directory(dir)) => {
-                //trace!("{} : {:?}", handle.url, &dir);
-                // if we are supposed to randomize do so and grab next
-                    // if we don't have any files in this dir we randomize a new one
-                let p = if !dir.files.is_empty() {
-                    let n = rng.gen_range(0..dir.files.len());
-                    Path::new(&handle.url).join(&dir.files[n]).to_owned()
-                } else {
-                    let n = rng.gen_range(0..dir.dirs.len());
-                    Path::new(&handle.url).join(&dir.dirs[n]).to_owned()
-                };
-                let p = p.to_string_lossy();
-                let vfs_handle = state.vfs.load_url(&p);
-                state.inprogress[i] = VfsHandle::new(&p, vfs_handle, None, ActionAfterLoad::Play);
-            }
-
-            Ok(VfsRecvMsg::ReadDone(data)) => {
-                let name = handle.url.to_owned();
-                trace!("Got data back from vfs (size {})", data.len());
-                find_playback_plugin(state, &name, data);
-                state.inprogress.remove(i);
-            }
+            Ok(VfsRecvMsg::Directory(dir)) => update_get_directory(state, dir, rng, i),
+            Ok(VfsRecvMsg::ReadDone(data)) => update_get_read_done(state, data, i),
             _  => (),
         }
 
-        if state.inprogress.is_empty() {
-            break;
-        }
-
-        if state.inprogress[i].url.is_empty() {
+        if i < state.inprogress.len() && state.inprogress[i].url.is_empty() {
             state.inprogress.remove(i);
         }
 
         i += 1;
     }
-
-    /*/
-    for handle in new_handles {
-        state.inprogress.push(handle)
-    }
-    */
 
     // Process active playing tunes
 
@@ -310,10 +322,7 @@ fn update(state: &mut PlaylistInternal, rng: &mut ThreadRng) {
     //trace!("active songs {} inprogress {}", state.active_songs.len(), state.inprogress.len());
 
     if state.active_songs.len() < 2 && state.inprogress.len() <= 2 {
-        let vfs_handle = state.vfs.load_url(&state.randomize_base_dir);
-        state.state = State::RandomizeNewDir;
-        trace!("Push new randomize song {}", state.randomize_base_dir);
-        state.inprogress.push(VfsHandle::new(&state.randomize_base_dir, vfs_handle, None, ActionAfterLoad::Play));
+        get_next_song(state, None);
     }
 }
 
@@ -356,7 +365,7 @@ impl Playlist {
             .name("playlist".to_string())
             .spawn(move || {
                 let mut rng = thread_rng();
-                rng.gen::<usize>();
+
                 loop {
                     if let Ok(msg) = thread_recv.try_recv() {
                         incoming_msg(&mut state, &msg);

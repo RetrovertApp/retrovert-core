@@ -375,10 +375,10 @@ fn update(state: &mut PlaybackInternal) -> bool {
 
     // info check if we have finished reading from this plugin and if that is the case we will close it and remove it from the player list
     if info.status == ReadStatus::Finished {
-        trace!("Playback finished");
         state.players[0].1.send(PlaybackReply::PlaybackEnded).unwrap();
         unsafe { (player.plugin.destroy)(player.user_data) };
         state.players.remove(0);
+        trace!("Playback finished - players left {}", state.players.len());
     }
 
     false
