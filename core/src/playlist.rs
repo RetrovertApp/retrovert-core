@@ -2,8 +2,8 @@ use vfs::Vfs;
 use crossbeam_channel::unbounded;
 use std::thread::Thread;
 use std::{thread, sync::Mutex};
-use log::{error, trace};
-use vfs::RecvMsg as VfsRecvMsg;
+use log::{error, trace, info};
+use vfs::{RecvMsg as VfsRecvMsg, FilesDirs};
 use std::path::Path;
 use std::ptr;
 use anyhow::Result;
@@ -28,11 +28,15 @@ struct Entry {
 }
 
 
+/// Mode of the playlist such as play next song, ranhdomize, etc 
 #[derive(PartialEq)]
-enum State {
+enum Mode {
+    /// Do nothing 
     Default,
-    RandomizeNextSong,
-    RandomizeNewDir,
+    /// Go to the next song in the playlist
+    NextSong,
+    /// Randomize the playlist 
+    Randomize,
 }
 
 #[derive(Clone)]
@@ -81,7 +85,11 @@ struct PlaylistInternal {
     /// List of plugins that supports playback. We loop over these and figure out if they can play something
     playback_plugins: PlaybackPlugins,
     /// State machine
-    state: State,
+    mode: Mode,
+    /// Count how many times we tried to randomize, but failed (such as empty directories, non-playable files, etc) 
+    /// If we reach a certain limit we can tell the user about this and if they want to try to play more 
+    /// they can bump the limit
+    missed_randomize_tries: usize,
 }
 
 // Replies from the Playlist
@@ -122,8 +130,9 @@ impl PlaylistInternal {
             randomize_base_dir: String::new(),
             randomize_current_dir: String::new(),
             //randomize_handle: None,
-            state: State::Default,
+            mode: Mode::Default,
             playback_plugins,
+            missed_randomize_tries: 0,
         }
     }
 }
@@ -138,7 +147,7 @@ fn incoming_msg(state: &mut PlaylistInternal, msg: &PlaylistMessage) {
         },
 
         PlaylistMessage::PlayUrl(url, ret_msg) => {
-            state.state = State::RandomizeNewDir;
+            state.mode = Mode::Randomize;
             state.randomize_base_dir = url.to_owned();
             trace!("Playlist: adding {} to vfs", url);
             let vfs_handle = state.vfs.load_url(url);
@@ -193,6 +202,31 @@ fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: Box<[u8]>
     }
 
     false
+}
+
+/// Handles when a directory gets recived as reponse when loading a url
+fn update_directory(state: &mut PlaylistInternal, files_dirs: FilesDirs, rng: &mut ThreadRng, progress_index: usize) {
+    match state.mode {
+        Mode::Randomize => {
+            // total number of entries
+            let total_len = files_dirs.files.len() + files_dirs.dirs.len(); 
+            // if we don't have any files we check if we randomized over n number of tries without finding anything
+            // to play. At that point we stop trying and should report it back to the user (currently we just log)
+            if total_len == 0 {
+                state.missed_randomize_tries += 1;
+                // TODO: User configurable
+                if state.missed_randomize_tries >= 10 {
+                    info!("Tried to randomize {} tries without finding anything playable. Stopping", 10);
+                    state.mode = Mode::Default;
+                    return;
+                }
+            }
+
+            state.missed_randomize_tries = 0;
+        }
+
+        Mode::NextSong | Mode::Default => (),
+    }
 }
 
 fn update(state: &mut PlaylistInternal, rng: &mut ThreadRng) {
