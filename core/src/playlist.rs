@@ -1,32 +1,15 @@
 use vfs::Vfs;
 use crossbeam_channel::unbounded;
-use std::thread::Thread;
-use std::{thread, sync::Mutex};
+use std::{thread};
 use log::{error, trace, info};
 use vfs::{RecvMsg as VfsRecvMsg, FilesDirs};
 use std::path::Path;
 use std::ptr;
 use anyhow::Result;
-use cfixed_string::CFixedString;
 use rand::{thread_rng, Rng, rngs::ThreadRng};
 
 use crate::plugin_handler::{PlaybackPlugins};
 use crate::playback::{Playback, PlaybackHandle, PlaybackPluginInstance, PlaybackReply};
-
-enum EntryType {
-    SubSong(usize),
-    /// Plugin required for opening this path
-    Driver(String),
-}
-
-struct Entry {
-    /// Entry type
-    entry_type: EntryType,
-    /// Used for accelerating data extracton
-    extractor_data: Vec<u8>,
-    entry_url: String,
-}
-
 
 /// Mode of the playlist such as play next song, ranhdomize, etc 
 #[derive(PartialEq)]
@@ -34,32 +17,24 @@ enum Mode {
     /// Do nothing 
     Default,
     /// Go to the next song in the playlist
-    NextSong,
+    //NextSong,
     /// Randomize the playlist 
     Randomize,
 }
-
-#[derive(Clone)]
-pub(crate) enum ActionAfterLoad {
-    Play,
-    AddUrl,
-}
-
 pub(crate) struct VfsHandle {
     /// Original Url that was requested to be loaded 
     pub(crate) url: String,
     /// Handle to check status for the loading/processing on the VFS
     pub(crate) vfs_handle: vfs::Handle,
     // Message to send back to main thread
-    pub(crate) ret_msg: Option<crossbeam_channel::Sender<PlaylistReply>>,
+    //pub(crate) ret_msg: Option<crossbeam_channel::Sender<PlaylistReply>>,
 }
 
 impl VfsHandle {
-    fn new(url: &str, vfs: &Vfs, ret_msg: Option<crossbeam_channel::Sender<PlaylistReply>>) -> VfsHandle {
+    fn new(url: &str, vfs: &Vfs, _ret_msg: Option<crossbeam_channel::Sender<PlaylistReply>>) -> VfsHandle {
         VfsHandle {
             url: url.to_owned(),
             vfs_handle: vfs.load_url(url),
-            ret_msg,
         }
     }
 }
@@ -73,10 +48,6 @@ struct PlaylistInternal {
     inprogress: Vec<VfsHandle>,
     /// Handles that are being loaded/processed
     randomize_base_dir: String,
-    /// Handles that are being loaded/processed
-    randomize_current_dir: String,
-    /// Handle to fetch new dir/files
-    //randomize_handle: Option<VfsHandle>,
     /// Songs that are currently playing on the decoder thread 
     active_songs: Vec<PlaybackHandle>,
     /// List of plugins that supports playback. We loop over these and figure out if they can play something
@@ -125,8 +96,6 @@ impl PlaylistInternal {
             inprogress: Vec::new(),
             active_songs: Vec::new(),
             randomize_base_dir: String::new(),
-            randomize_current_dir: String::new(),
-            //randomize_handle: None,
             mode: Mode::Default,
             playback_plugins,
             missed_randomize_tries: 0,
@@ -148,12 +117,13 @@ fn incoming_msg(state: &mut PlaylistInternal, msg: &PlaylistMessage) {
             state.randomize_base_dir = url.to_owned();
             trace!("Playlist: adding {} to vfs", url);
             state.inprogress.push(VfsHandle::new(url, &state.vfs, Some(ret_msg.clone())));
+            state.inprogress.push(VfsHandle::new(url, &state.vfs, Some(ret_msg.clone())));
         }
     }
 }
 
 /// Given data and a string find a player for it
-fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: Box<[u8]>) -> bool {
+fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: Box<[u8]>, progress_index: usize) -> bool {
     let path = Path::new(url);
     let filename = match path.file_name() {
         None => "".into(),
@@ -187,6 +157,8 @@ fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: Box<[u8]>
                 unsafe { ((player.plugin_funcs).destroy)(user_data) };
                 continue;
             }
+
+            info!("Queueing playback: {}", &state.inprogress[progress_index].url);
 
             let instance = PlaybackPluginInstance { user_data, plugin: player.plugin_funcs };
             let playing_track = state.playback.queue_playback(instance).unwrap();
@@ -255,7 +227,7 @@ fn update_get_directory(state: &mut PlaylistInternal, files_dirs: FilesDirs, rng
             state.missed_randomize_tries = 0;
         }
 
-        Mode::NextSong | Mode::Default => (),
+        Mode::Default => (),
     }
 }
 
@@ -263,7 +235,7 @@ fn update_get_read_done(state: &mut PlaylistInternal, data: Box<[u8]>, progress_
     trace!("Got data back from vfs (size {})", data.len());
     let url = state.inprogress[progress_index].url.to_owned();
     // if we managed to find a player for the file we will remove it, otherwise if get a text song
-    if find_playback_plugin(state, &url, data) {
+    if find_playback_plugin(state, &url, data, progress_index) {
         state.inprogress.remove(progress_index);
     } else {
         trace!("Unable to find player for {} trying to find next song", &url);
@@ -321,7 +293,7 @@ fn update(state: &mut PlaylistInternal, rng: &mut ThreadRng) {
 
     //trace!("active songs {} inprogress {}", state.active_songs.len(), state.inprogress.len());
 
-    if state.active_songs.len() < 2 && state.inprogress.len() <= 2 {
+    if state.active_songs.len() == 1 && state.inprogress.is_empty() {
         get_next_song(state, None);
     }
 }

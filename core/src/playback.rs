@@ -5,7 +5,7 @@ use plugin_types::{
     AudioStreamFormat, 
     ReadData, 
     ReadInfo, 
-    ReadStatus, ConvertConfig, PlaybackCallback
+    ReadStatus, ConvertConfig
 };
 use crossbeam_channel::{Sender, Receiver, unbounded};
 use log::{error, trace};
@@ -26,12 +26,14 @@ pub struct PlaybackSettings {
     pub max_cpu_load: usize,
 }
 
+/*
 impl PlaybackSettings {
     fn new() -> PlaybackSettings {
         // 2000 ms of buffering and approx max 90% cpu load
         PlaybackSettings { buffer_len_ms: 2000, max_cpu_load: 90 }
     }
 }
+*/
 
 // Temp buffer size is 1 sec of audio data for 2 channels floats
 const TEMP_BUFFER_SIZE: usize = 48000 * 4 * 2;
