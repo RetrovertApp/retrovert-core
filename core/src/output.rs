@@ -28,9 +28,10 @@ unsafe extern "C" fn output_callback(user_data: *mut c_void, output_data: *mut c
         Ok(PlaybackReply::InvalidRequest) => error!("Invalid request. No data was generated"),
         Ok(PlaybackReply::OutOfData) => error!("Ran out of data (likel requesting too fast/plaback is too slow. No data will be generated)"),
         Err(e) => error!("Got error when reading from playback {:?} No data will be generated.", e),
+        _ => (),
     }
 
-    return 0;
+    0
 }
 
 #[derive(Clone)]

@@ -5,9 +5,9 @@ use plugin_types::{
     AudioStreamFormat, 
     ReadData, 
     ReadInfo, 
-    ReadStatus, ConvertConfig
+    ReadStatus, ConvertConfig, PlaybackCallback
 };
-use crossbeam_channel::{Sender, unbounded};
+use crossbeam_channel::{Sender, Receiver, unbounded};
 use log::{error, trace};
 use anyhow::{Result, bail};
 use std::{
@@ -51,6 +51,22 @@ pub struct Playback {
     pub channel: Sender<PlaybackMessage>,
 } 
 
+pub struct PlaybackHandle {
+    pub channel: Receiver<PlaybackReply>,
+}
+
+impl Playback {
+    /// Loads the first file given a url. If an known archive is encounterd the first file will be extracted
+    /// (given if it has a file listing) and that will be returned until a file is encountered. If there are
+    /// no files an error will/archive will be returned instead and the user code has to handle it
+    pub fn queue_playback(&self, playback_instance: PlaybackPluginInstance) -> Result<PlaybackHandle> {
+        let (thread_send, main_recv) = unbounded::<PlaybackReply>();
+
+        self.channel.send(PlaybackMessage::QueuePlayback(playback_instance, thread_send))?;
+
+        Ok(PlaybackHandle { channel: main_recv })
+    }
+}
 
 #[derive(Clone)]
 pub struct PlaybackPluginInstance {
@@ -93,7 +109,7 @@ impl Index {
 
 
 pub struct PlaybackInternal {
-    pub players: Vec<PlaybackPluginInstance>,
+    pub players: Vec<(PlaybackPluginInstance, Sender<PlaybackReply>)>,
     /// List of all resample plugins
     pub resample_plugins: ResamplePlugins,
     /// Used for generating data to requests
@@ -115,11 +131,15 @@ pub struct PlaybackInternal {
 }
 
 pub enum PlaybackMessage {
-    QueuePlayback(PlaybackPluginInstance),
+    QueuePlayback(PlaybackPluginInstance, Sender<PlaybackReply>),
     GetData(plugin_types::AudioFormat, usize, Sender<PlaybackReply>)
 }
 
 pub enum PlaybackReply {
+    /// Playback of requsted file has started
+    PlaybackStarted,
+    /// Playback of the request has ended
+    PlaybackEnded,
     /// This reply can happen if the decoder thread hasn't generated enough data.
     OutOfData,
     /// Generated if the request is invalid (i.e too large size etc) 
@@ -214,7 +234,7 @@ fn get_data(state: &mut PlaybackInternal, format: AudioFormat, frames: usize, ms
 
     // if format differs from the default format we need to convert it
     if format != DEFAULT_AUDIO_FORMAT {
-        trace!("converting from {:?} -> {:?}", DEFAULT_AUDIO_FORMAT, format);
+        //trace!("converting from {:?} -> {:?}", DEFAULT_AUDIO_FORMAT, format);
 
         let required_input_frames = unsafe { 
             (state.output_resampler.plugin.get_required_input_frame_count)(state.output_resampler.user_data, frames as _) 
@@ -233,7 +253,6 @@ fn get_data(state: &mut PlaybackInternal, format: AudioFormat, frames: usize, ms
             state.read_index.add(bytes_size);
         } else {
             let rem_count = state.ring_buffer[read_index..].len();
-            trace!("{} {}", rem_count, bytes_size);
             let rest_count = bytes_size - rem_count; 
             // if we need to wrap the ring-buffer we need to copy the data in two parts to a temp buffer
             // and then run the convert pass from that data
@@ -270,8 +289,8 @@ fn get_data(state: &mut PlaybackInternal, format: AudioFormat, frames: usize, ms
 fn incoming_msg(state: &mut PlaybackInternal, msg: &PlaybackMessage) {
     match msg {
         // TODO: Implement
-        PlaybackMessage::QueuePlayback(playback) => {
-            state.players.push(playback.clone());
+        PlaybackMessage::QueuePlayback(playback, msg) => {
+            state.players.push((playback.clone(), msg.clone()));
         },
 
         PlaybackMessage::GetData(format, frames, msg) => {
@@ -303,7 +322,7 @@ fn update(state: &mut PlaybackInternal) -> bool {
         return true;
     }
 
-    let player = &state.players[0];
+    let player = &state.players[0].0;
 
     // TODO: Use configured audio format
     // TODO: Fix hard-coded frames-count
@@ -356,6 +375,8 @@ fn update(state: &mut PlaybackInternal) -> bool {
 
     // info check if we have finished reading from this plugin and if that is the case we will close it and remove it from the player list
     if info.status == ReadStatus::Finished {
+        trace!("Playback finished");
+        state.players[0].1.send(PlaybackReply::PlaybackEnded).unwrap();
         unsafe { (player.plugin.destroy)(player.user_data) };
         state.players.remove(0);
     }

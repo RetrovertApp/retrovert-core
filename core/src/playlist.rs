@@ -1,5 +1,6 @@
 use vfs::Vfs;
 use crossbeam_channel::unbounded;
+use std::thread::Thread;
 use std::{thread, sync::Mutex};
 use log::{error, trace};
 use vfs::RecvMsg as VfsRecvMsg;
@@ -7,9 +8,10 @@ use std::path::Path;
 use std::ptr;
 use anyhow::Result;
 use cfixed_string::CFixedString;
+use rand::{thread_rng, Rng, rngs::ThreadRng};
 
 use crate::plugin_handler::{PlaybackPlugins};
-use crate::playback::{Playback, PlaybackMessage, PlaybackPluginInstance};
+use crate::playback::{Playback, PlaybackHandle, PlaybackPluginInstance, PlaybackReply};
 
 enum EntryType {
     SubSong(usize),
@@ -25,12 +27,15 @@ struct Entry {
     entry_url: String,
 }
 
-/*
-struct PlaylistEntry {
-    entries: Vec<Entries>,
-}
-*/
 
+#[derive(PartialEq)]
+enum State {
+    Default,
+    RandomizeNextSong,
+    RandomizeNewDir,
+}
+
+#[derive(Clone)]
 pub(crate) enum ActionAfterLoad {
     Play,
     AddUrl,
@@ -42,17 +47,17 @@ pub(crate) struct VfsHandle {
     /// Handle to check status for the loading/processing on the VFS
     pub(crate) vfs_handle: vfs::Handle,
     // Message to send back to main thread
-    pub(crate) ret_msg: crossbeam_channel::Sender<PlaylistReply>,
+    pub(crate) ret_msg: Option<crossbeam_channel::Sender<PlaylistReply>>,
     // This is the action to take after the load has finished
     pub(crate) action: ActionAfterLoad,
 }
 
 impl VfsHandle {
-    fn new(url: &str, vfs_handle: vfs::Handle, ret_msg: &crossbeam_channel::Sender<PlaylistReply>, action: ActionAfterLoad) -> VfsHandle {
+    fn new(url: &str, vfs_handle: vfs::Handle, ret_msg: Option<crossbeam_channel::Sender<PlaylistReply>>, action: ActionAfterLoad) -> VfsHandle {
         VfsHandle {
             url: url.to_owned(),
             vfs_handle,
-            ret_msg: ret_msg.clone(),
+            ret_msg,
             action
         }
     }
@@ -65,8 +70,18 @@ struct PlaylistInternal {
     playback: Playback,
     /// Handles that are being loaded/processed
     inprogress: Vec<VfsHandle>,
+    /// Handles that are being loaded/processed
+    randomize_base_dir: String,
+    /// Handles that are being loaded/processed
+    randomize_current_dir: String,
+    /// Handle to fetch new dir/files
+    //randomize_handle: Option<VfsHandle>,
+    /// Songs that are currently playing on the decoder thread 
+    active_songs: Vec<PlaybackHandle>,
     /// List of plugins that supports playback. We loop over these and figure out if they can play something
     playback_plugins: PlaybackPlugins,
+    /// State machine
+    state: State,
 }
 
 // Replies from the Playlist
@@ -97,13 +112,17 @@ pub struct PlaylistHandle {
     pub recv: crossbeam_channel::Receiver<PlaylistReply>,
 }
 
-
 impl PlaylistInternal {
     fn new(vfs: &Vfs, playback: &Playback, playback_plugins: PlaybackPlugins) -> PlaylistInternal {
         PlaylistInternal { 
             vfs: vfs.clone(),
             playback: playback.clone(),
             inprogress: Vec::new(),
+            active_songs: Vec::new(),
+            randomize_base_dir: String::new(),
+            randomize_current_dir: String::new(),
+            //randomize_handle: None,
+            state: State::Default,
             playback_plugins,
         }
     }
@@ -119,15 +138,17 @@ fn incoming_msg(state: &mut PlaylistInternal, msg: &PlaylistMessage) {
         },
 
         PlaylistMessage::PlayUrl(url, ret_msg) => {
+            state.state = State::RandomizeNewDir;
+            state.randomize_base_dir = url.to_owned();
             trace!("Playlist: adding {} to vfs", url);
             let vfs_handle = state.vfs.load_url(url);
-            state.inprogress.push(VfsHandle::new(url, vfs_handle, ret_msg, ActionAfterLoad::Play));
+            state.inprogress.push(VfsHandle::new(url, vfs_handle, Some(ret_msg.clone()), ActionAfterLoad::Play));
         },
     }
 }
 
 /// Given data and a string find a player for it
-fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: Box<[u8]>) {
+fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: Box<[u8]>) -> bool {
     let path = Path::new(url);
     let filename = match path.file_name() {
         None => "".into(),
@@ -163,23 +184,48 @@ fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: Box<[u8]>
             }
 
             let instance = PlaybackPluginInstance { user_data, plugin: player.plugin_funcs };
-            state.playback.channel.send(PlaybackMessage::QueuePlayback(instance)).unwrap();
+            let playing_track = state.playback.queue_playback(instance).unwrap();
 
-            return;
+            state.active_songs.push(playing_track);
+            
+            return true;
         }
     }
+
+    false
 }
 
-fn update(state: &mut PlaylistInternal) {
+fn update(state: &mut PlaylistInternal, rng: &mut ThreadRng) {
     // Process loading in progress
     let mut i = 0;
+
+    //let mut new_handles = Vec::new();
+
     while i < state.inprogress.len() {
         let handle = &state.inprogress[i];
+
+        trace!("state name {} : {}", i, handle.url);
 
         match handle.vfs_handle.recv.try_recv() {
             Ok(VfsRecvMsg::Error(err)) => {
                 error!("Error processing vfs handle {:?}", err);
                 state.inprogress.remove(i);
+            }
+
+            Ok(VfsRecvMsg::Directory(dir)) => {
+                //trace!("{} : {:?}", handle.url, &dir);
+                // if we are supposed to randomize do so and grab next
+                    // if we don't have any files in this dir we randomize a new one
+                let p = if !dir.files.is_empty() {
+                    let n = rng.gen_range(0..dir.files.len());
+                    Path::new(&handle.url).join(&dir.files[n]).to_owned()
+                } else {
+                    let n = rng.gen_range(0..dir.dirs.len());
+                    Path::new(&handle.url).join(&dir.dirs[n]).to_owned()
+                };
+                let p = p.to_string_lossy();
+                let vfs_handle = state.vfs.load_url(&p);
+                state.inprogress[i] = VfsHandle::new(&p, vfs_handle, None, ActionAfterLoad::Play);
             }
 
             Ok(VfsRecvMsg::ReadDone(data)) => {
@@ -188,20 +234,52 @@ fn update(state: &mut PlaylistInternal) {
                 find_playback_plugin(state, &name, data);
                 state.inprogress.remove(i);
             }
-            /*
-            Err(e) => {
-                error!("Error processing vfs handle {:?}", e);
-                state.inprogress.remove(i);
-            }
-            */
             _  => (),
         }
 
-        if state.inprogress.len() >= i {
+        if state.inprogress.is_empty() {
             break;
         }
 
+        if state.inprogress[i].url.is_empty() {
+            state.inprogress.remove(i);
+        }
+
         i += 1;
+    }
+
+    /*/
+    for handle in new_handles {
+        state.inprogress.push(handle)
+    }
+    */
+
+    // Process active playing tunes
+
+    while i < state.active_songs.len() {
+        let handle = &state.active_songs[i];
+
+        match handle.channel.try_recv() {
+            Ok(PlaybackReply::PlaybackStarted) => {
+                trace!("Playback started");
+            }
+            Ok(PlaybackReply::PlaybackEnded) => {
+                trace!("Playback ended");
+                state.active_songs.remove(i);
+            }
+            _ => (),
+        }
+
+        i += 1;
+    }
+
+    //trace!("active songs {} inprogress {}", state.active_songs.len(), state.inprogress.len());
+
+    if state.active_songs.len() < 2 && state.inprogress.len() <= 2 {
+        let vfs_handle = state.vfs.load_url(&state.randomize_base_dir);
+        state.state = State::RandomizeNewDir;
+        trace!("Push new randomize song {}", state.randomize_base_dir);
+        state.inprogress.push(VfsHandle::new(&state.randomize_base_dir, vfs_handle, None, ActionAfterLoad::Play));
     }
 }
 
@@ -243,12 +321,14 @@ impl Playlist {
         thread::Builder::new()
             .name("playlist".to_string())
             .spawn(move || {
+                let mut rng = thread_rng();
+                rng.gen::<usize>();
                 loop {
                     if let Ok(msg) = thread_recv.try_recv() {
                         incoming_msg(&mut state, &msg);
                     } 
 
-                    update(&mut state);
+                    update(&mut state, &mut rng);
                     // if we didn't get any message we sleep for 1 ms to not hammer the core after one update
                     thread::sleep(std::time::Duration::from_millis(1));
                 }
