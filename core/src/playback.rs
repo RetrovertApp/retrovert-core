@@ -119,15 +119,15 @@ pub struct PlaybackInternal {
     /// Resampler when reading data from plugins 
     pub plugin_resampler: ResamplePluginInstance, 
     /// Temporary buffer used when requesting data from a player plugin
-    temp_gen: Vec<u8>,
-    temp_resample: Vec<u8>,
+    temp_gen: [Vec<u8>; 2],
     /// Ring buffer for audio output
     ring_buffer: Vec<u8>,
     read_index: Index,
     write_index: Index,
     // Format used for the internal ring-buffer
     internal_format: AudioFormat,
-    /// Format used for the get_data requester.
+    // Format used for the current playing plugin 
+    plugin_format: AudioFormat,
     /// TODO: Keep a cache of these?
     last_request_format: AudioFormat,
 }
@@ -164,8 +164,7 @@ impl PlaybackInternal {
             //settings,
             // 2 sec of buffering for now
             ring_buffer: vec![0u8; ring_buffer_size],
-            temp_gen: vec![0u8; TEMP_BUFFER_SIZE],
-            temp_resample: vec![0u8; TEMP_BUFFER_SIZE],
+            temp_gen: [vec![0u8; TEMP_BUFFER_SIZE], vec![0u8; TEMP_BUFFER_SIZE]],
             players: Vec::new(),
             resample_plugins,
             output_resampler,
@@ -174,6 +173,7 @@ impl PlaybackInternal {
             write_index: Index::default(),
             internal_format: DEFAULT_AUDIO_FORMAT,
             last_request_format: DEFAULT_AUDIO_FORMAT, 
+            plugin_format: DEFAULT_AUDIO_FORMAT,
         })
     }
 
@@ -258,13 +258,13 @@ fn get_data(state: &mut PlaybackInternal, format: AudioFormat, frames: usize, ms
             let rest_count = bytes_size - rem_count; 
             // if we need to wrap the ring-buffer we need to copy the data in two parts to a temp buffer
             // and then run the convert pass from that data
-            state.temp_resample[0..rem_count].copy_from_slice(&state.ring_buffer[read_index..]);
-            state.temp_resample[rem_count..bytes_size].copy_from_slice(&state.ring_buffer[0..rest_count]);
+            state.temp_gen[1][0..rem_count].copy_from_slice(&state.ring_buffer[read_index..]);
+            state.temp_gen[1][rem_count..bytes_size].copy_from_slice(&state.ring_buffer[0..rest_count]);
 
             unsafe {
                 (state.output_resampler.plugin.convert)(state.output_resampler.user_data, 
                     dest.as_mut_ptr() as _, 
-                    state.temp_resample.as_mut_ptr() as _, 
+                    state.temp_gen[1].as_mut_ptr() as _, 
                     required_input_frames as _);
             }
 
@@ -298,6 +298,27 @@ fn incoming_msg(state: &mut PlaybackInternal, msg: &PlaybackMessage) {
         PlaybackMessage::GetData(format, frames, msg) => {
             get_data(state, *format, *frames, msg);
         }
+    }
+}
+
+fn copy_buffer_to_ring(state: &mut PlaybackInternal, frame_count: usize, buffer_index: usize) {
+    let ring_buffer_len = state.ring_buffer.len(); 
+    let byte_size = get_byte_size_format(state.internal_format, frame_count);
+    let write_index = state.write_index.get();
+    let input_buffer = &state.temp_gen[buffer_index];
+
+    // if read index + size is smaller than the ring buffer size we can just copy the range into the ring buffer
+    if write_index + byte_size < ring_buffer_len {
+        state.ring_buffer[write_index..write_index + byte_size].copy_from_slice(&input_buffer[0..byte_size]);
+        state.write_index.add(byte_size);
+    } else {
+        let rem_count = state.ring_buffer[write_index..].len();
+        let rest_count = byte_size - rem_count; 
+        // if we need to wrap the ring-buffer we need to copy the data in two parts
+        state.ring_buffer[write_index..].copy_from_slice(&input_buffer[..rem_count]);
+        state.ring_buffer[0..rest_count].copy_from_slice(&input_buffer[rem_count..byte_size]);
+        state.write_index.set(rest_count);
+        state.write_index.bump_generation();
     }
 }
 
@@ -336,47 +357,54 @@ fn update(state: &mut PlaybackInternal) -> bool {
     };
 
     let read_data = ReadData {
-        channels_output: state.temp_gen.as_mut_ptr() as _,
+        channels_output: state.temp_gen[0].as_mut_ptr() as _,
         virtual_channel_output: ptr::null_mut(),
-        channels_output_max_bytes_size: state.temp_gen.len() as _,
+        channels_output_max_bytes_size: state.temp_gen[0].len() as _,
         virtual_channels_output_max_bytes_size: 0,
         info: read_info,
     };
 
-    //debug!("generating new data");
-
+    // Read data from the plugin
     let info = unsafe { (player.plugin.read_data)(player.user_data, read_data) };
-    let ring_buffer_len = state.ring_buffer.len(); 
 
     // can just copy the data to the ringbuffer
     if info.format == state.internal_format {
-        let byte_size = get_byte_size_format(info.format, info.frame_count as _);
-        let write_index = state.write_index.get();
-        // if read index + size is smaller than the ring buffer size we can just copy the range into the ring buffer
-        if write_index + byte_size < ring_buffer_len {
-            state.ring_buffer[write_index..write_index + byte_size].copy_from_slice(&state.temp_gen[0..byte_size]);
-            state.write_index.add(byte_size);
-        } else {
-            let rem_count = state.ring_buffer[write_index..].len();
-            let rest_count = byte_size - rem_count; 
-            // if we need to wrap the ring-buffer we need to copy the data in two parts
-            state.ring_buffer[write_index..].copy_from_slice(&state.temp_gen[..rem_count]);
-            state.ring_buffer[0..rest_count].copy_from_slice(&state.temp_gen[rem_count..byte_size]);
-            state.write_index.set(rest_count);
-            state.write_index.bump_generation();
-        }
-
-        // sanity check that ring-buffer read isn't larger than write read
-        if state.read_index.value >= state.write_index.value {
-            error!("ring-buffer read is ahead of write (read: {:x} write: {:x})", state.read_index.value, state.write_index.value);
-        }
-
+        copy_buffer_to_ring(state, info.frame_count as _, 0);
     } else {
-        todo!("This needs to be implemented!");
+        // make sure 
+        if state.plugin_format != info.format {
+            dbg!(state.internal_format);
+            dbg!(info.format);
+            let config = ConvertConfig { input: info.format, output: state.internal_format };
+            unsafe { (state.plugin_resampler.plugin.set_config)(state.plugin_resampler.user_data, &config) };
+            state.plugin_format = info.format;
+        }
+
+        let required_input_frames = unsafe { 
+            (state.plugin_resampler.plugin.get_required_input_frame_count)(
+                state.plugin_resampler.user_data, 
+                info.frame_count as _) 
+        };
+
+        // if read are within the ring-buffer range we can just convert directly from it to the output
+        let frame_count = unsafe {
+            (state.plugin_resampler.plugin.convert)(state.plugin_resampler.user_data, 
+                state.temp_gen[1].as_mut_ptr() as _, 
+                state.temp_gen[0].as_mut_ptr() as _, 
+                required_input_frames as _)
+        };
+
+        copy_buffer_to_ring(state, frame_count as _, 1);
+    }
+
+    // sanity check that ring-buffer read isn't larger than write read
+    if state.read_index.value >= state.write_index.value {
+        error!("ring-buffer read is ahead of write (read: {:x} write: {:x})", state.read_index.value, state.write_index.value);
     }
 
     // info check if we have finished reading from this plugin and if that is the case we will close it and remove it from the player list
     if info.status == ReadStatus::Finished {
+        let player = &state.players[0].0;
         state.players[0].1.send(PlaybackReply::PlaybackEnded).unwrap();
         unsafe { (player.plugin.destroy)(player.user_data) };
         state.players.remove(0);
