@@ -169,13 +169,6 @@ pub struct PlaybackPlugin {
         subsong: u32,
         settings: *const SettingsFFI,
     ) -> i32,
-    pub open_from_memory: unsafe extern "C" fn(
-        user_data: *mut c_void,
-        data: *const u8,
-        data_size: u64,
-        subsong: u32,
-        settings: *const SettingsFFI,
-    ) -> i32,
     pub close: unsafe extern "C" fn(user_data: *mut c_void),
     pub read_data: unsafe extern "C" fn(user_data: *mut c_void, dest: ReadData) -> ReadInfo,
     pub seek: unsafe extern "C" fn(user_data: *mut c_void, ms: i64) -> i64,

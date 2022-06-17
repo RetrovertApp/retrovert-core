@@ -4,6 +4,7 @@ pub mod log;
 pub mod metadata;
 pub mod settings;
 pub use ffi_gen::*;
+use vfs::Vfs;
 
 // It's not safe to pass pointers to other therads, so we use this to get around it
 unsafe impl Sync for PluginService {}
@@ -14,8 +15,8 @@ pub struct PluginService {
 }
 
 impl PluginService {
-    pub fn new(log_name: &str) -> PluginService {
-        let io_api = Box::leak(Box::new(io::Io::new()));
+    pub fn new(log_name: &str, vfs: Vfs) -> PluginService {
+        let io_api = Box::leak(Box::new(io::Io::new(vfs)));
         let metadata_api = Box::leak(Box::new(metadata::Metadata::new()));
         let settings_api = Box::leak(Box::new(settings::Settings::new()));
 

@@ -5,6 +5,7 @@ use log::{error, trace, info};
 use vfs::{RecvMsg as VfsRecvMsg, FilesDirs};
 use std::path::Path;
 use std::ptr;
+use cfixed_string::CFixedString;
 use anyhow::Result;
 use rand::{thread_rng, Rng, rngs::ThreadRng};
 
@@ -123,7 +124,7 @@ fn incoming_msg(state: &mut PlaylistInternal, msg: &PlaylistMessage) {
 }
 
 /// Given data and a string find a player for it
-fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: Box<[u8]>, progress_index: usize) -> bool {
+fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: &[u8], progress_index: usize) -> bool {
     let path = Path::new(url);
     let filename = match path.file_name() {
         None => "".into(),
@@ -137,7 +138,7 @@ fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: Box<[u8]>
         // Checking ifplugin can play this url
         trace!("{} : checking if plugin can can play: {}", plugin_name, url);
 
-        if player.probe_can_play(&data, data.len(), &filename, data.len() as _) {
+        if player.probe_can_play(data, data.len(), &filename, data.len() as _) {
             trace!("{} : reports that it can play file. Trying to create player instance for playback", plugin_name); 
 
             let service_funcs = player.service.get_c_api();
@@ -149,8 +150,9 @@ fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: Box<[u8]>
             }
 
             // TODO: Fix settings
-            //let c_name = CFixedString::from_str(&filename);
-            let open_state = unsafe { ((player.plugin_funcs).open_from_memory)(user_data, data.as_ptr(), data.len() as _, 0, ptr::null()) };
+            let c_name = CFixedString::from_str(&url);
+            //let open_state = unsafe { ((player.plugin_funcs).open_from_memory)(user_data, data.as_ptr(), data.len() as _, 0, ptr::null()) };
+            let open_state = unsafe { ((player.plugin_funcs).open)(user_data, c_name.as_ptr(), 0, ptr::null()) };
 
             if open_state < 0 {
                 error!("{} : Unable to create playback", plugin_name); 
@@ -231,7 +233,7 @@ fn update_get_directory(state: &mut PlaylistInternal, files_dirs: FilesDirs, rng
     }
 }
 
-fn update_get_read_done(state: &mut PlaylistInternal, data: Box<[u8]>, progress_index: usize) {
+fn update_get_read_done(state: &mut PlaylistInternal, data: &[u8], progress_index: usize) {
     trace!("Got data back from vfs (size {})", data.len());
     let url = state.inprogress[progress_index].url.to_owned();
     // if we managed to find a player for the file we will remove it, otherwise if get a text song
@@ -261,7 +263,7 @@ fn update(state: &mut PlaylistInternal, rng: &mut ThreadRng) {
             }
 
             Ok(VfsRecvMsg::Directory(dir)) => update_get_directory(state, dir, rng, i),
-            Ok(VfsRecvMsg::ReadDone(data)) => update_get_read_done(state, data, i),
+            Ok(VfsRecvMsg::ReadDone(data)) => update_get_read_done(state, data.get(), i),
             _  => (),
         }
 

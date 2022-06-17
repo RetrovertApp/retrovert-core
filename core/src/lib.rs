@@ -40,9 +40,9 @@ pub struct Core {
 impl Core {
     pub fn new(args: &Args) -> Box<Core> {
         // TODO: Fix unwraps
-        let plugin_service = PluginService::new("core");
         let mut plugins = Plugins::default();
         let vfs = Vfs::new();
+        let plugin_service = PluginService::new("core", vfs.clone());
 
         dbg!(&args.plugin_paths);
 
