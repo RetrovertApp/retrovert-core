@@ -22,7 +22,8 @@ impl Io {
         let handle = self.vfs.load_url(url);
         
         for _ in 0..100 {
-            match handle.recv.recv_timeout(Duration::from_millis(1)) {
+            let mut should_sleep = true;
+            match handle.recv.try_recv() {
                 Ok(RecvMsg::ReadDone(data)) => {
                     return IoReadUrlResult {
                         data: data.ptr, 
@@ -33,11 +34,18 @@ impl Io {
                     error!("{:?}", e);
                     break;
                 },
+                Ok(RecvMsg::ReadProgress(_)) => should_sleep = false,
+                /*
                 Err(e) => {
                     error!("{:?}", e);
                     break;
                 }
+                */
                 _ => (),
+            }
+
+            if should_sleep {
+                thread::sleep(Duration::from_millis(10));
             }
         }
 
