@@ -250,7 +250,7 @@ impl Settings {
 
         if let Some(setting) = Self::find_setting(id, s) {
             SStringResult {
-                result: SettingsResult::NotFound,
+                result: SettingsResult::Ok,
                 value: unsafe { setting.string_fixed_value.value },
             }
         } else {
@@ -273,10 +273,20 @@ impl Settings {
         };
 
         if let Some(setting) = Self::find_setting(id, s) {
-            SIntResult {
-                result: SettingsResult::NotFound,
-                value: unsafe { setting.int_value.value },
-            }
+            let int_value = unsafe { &setting.int_value };
+
+            if int_value.s_base.widget_type != RVS_INTEGER_TYPE && 
+               int_value.s_base.widget_type != RVS_INTEGER_RANGE_TYPE {
+                SIntResult {
+                    result: SettingsResult::WrongType,
+                    value: 0
+                }
+            } else {
+                SIntResult {
+                    result: SettingsResult::Ok,
+                    value: int_value.value,
+                }
+            } 
         } else {
             SIntResult {
                 result: SettingsResult::NotFound,
@@ -297,9 +307,18 @@ impl Settings {
         };
 
         if let Some(setting) = Self::find_setting(id, s) {
-            SFloatResult {
-                result: SettingsResult::NotFound,
-                value: unsafe { setting.float_value.value },
+            let float_value = unsafe { &setting.float_value };
+
+            if float_value.s_base.widget_type != RVS_FLOAT_TYPE {
+                SFloatResult {
+                    result: SettingsResult::WrongType,
+                    value: 0.0
+                }
+            } else {
+                SFloatResult {
+                    result: SettingsResult::Ok,
+                    value: float_value.value,
+                }
             }
         } else {
             SFloatResult {
@@ -321,9 +340,18 @@ impl Settings {
         };
 
         if let Some(setting) = Self::find_setting(id, s) {
-            SBoolResult {
-                result: SettingsResult::NotFound,
-                value: unsafe { setting.bool_value.value },
+            let bool_value = unsafe { &setting.bool_value };
+
+            if bool_value.s_base.widget_type != RVS_BOOL_TYPE {
+                SBoolResult {
+                    result: SettingsResult::WrongType,
+                    value: false,
+                }
+            } else {
+                SBoolResult {
+                    result: SettingsResult::Ok,
+                    value: bool_value.value,
+                }
             }
         } else {
             SBoolResult {

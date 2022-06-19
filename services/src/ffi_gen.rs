@@ -245,7 +245,7 @@ pub struct SBase {
     pub widget_id: *const c_char,
     pub name: *const c_char,
     pub desc: *const c_char,
-    pub widget_type: i32,
+    pub widget_type: u64,
 }
 
 impl SBase {

@@ -10,6 +10,7 @@ use vfs::Vfs;
 unsafe impl Sync for PluginService {}
 unsafe impl Send for PluginService {}
 
+#[derive(Clone)]
 pub struct PluginService {
     service_api: *const ServiceFFI,
 }
@@ -57,8 +58,6 @@ impl PluginService {
     pub fn get_settings_c_api(&self) {
 
     }
-
-
 
 }
 

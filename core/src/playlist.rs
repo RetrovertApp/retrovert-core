@@ -4,7 +4,6 @@ use std::{thread};
 use log::{error, trace, info};
 use vfs::{RecvMsg as VfsRecvMsg, FilesDirs};
 use std::path::Path;
-use std::ptr;
 use cfixed_string::CFixedString;
 use anyhow::Result;
 use rand::{thread_rng, Rng, rngs::ThreadRng};
@@ -55,9 +54,7 @@ struct PlaylistInternal {
     playback_plugins: PlaybackPlugins,
     /// State machine
     mode: Mode,
-    /// Count how many times we tried to randomize, but failed (such as empty directories, non-playable files, etc) 
-    /// If we reach a certain limit we can tell the user about this and if they want to try to play more 
-    /// they can bump the limit
+    /// If we reach a certain limit we can tell the user about this and if they want to try to play more  they can bump the limit
     missed_randomize_tries: usize,
 }
 
@@ -152,7 +149,7 @@ fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: &[u8], pr
             // TODO: Fix settings
             let c_name = CFixedString::from_str(&url);
             //let open_state = unsafe { ((player.plugin_funcs).open_from_memory)(user_data, data.as_ptr(), data.len() as _, 0, ptr::null()) };
-            let open_state = unsafe { ((player.plugin_funcs).open)(user_data, c_name.as_ptr(), 0, ptr::null()) };
+            let open_state = unsafe { ((player.plugin_funcs).open)(user_data, c_name.as_ptr(), 0, service_funcs) };
 
             if open_state < 0 {
                 error!("{} : Unable to create playback", plugin_name); 

@@ -167,17 +167,15 @@ pub struct PlaybackPlugin {
         user_data: *mut c_void,
         url: *const c_char,
         subsong: u32,
-        settings: *const SettingsFFI,
+        services: *const ServiceFFI,
     ) -> i32,
     pub close: unsafe extern "C" fn(user_data: *mut c_void),
     pub read_data: unsafe extern "C" fn(user_data: *mut c_void, dest: ReadData) -> ReadInfo,
     pub seek: unsafe extern "C" fn(user_data: *mut c_void, ms: i64) -> i64,
     pub metadata: unsafe extern "C" fn(url: *const c_char, services: *const ServiceFFI) -> i32,
     pub static_init: unsafe extern "C" fn(services: *const ServiceFFI),
-    pub settings_updated: unsafe extern "C" fn(
-        user_data: *mut c_void,
-        settings: *const SettingsFFI,
-    ) -> SettingsUpdate,
+    pub settings_updated:
+        unsafe extern "C" fn(user_data: *mut c_void, services: *const ServiceFFI) -> SettingsUpdate,
 }
 
 unsafe impl Sync for PlaybackPlugin {}
