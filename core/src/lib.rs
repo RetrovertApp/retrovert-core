@@ -151,8 +151,6 @@ fn init_core_create() -> Result<Args> {
     let mut pargs = pico_args::Arguments::from_env();
     let datadir_over: Option<String> = pargs.opt_value_from_str("--data-dir").unwrap();
 
-    dbg!(&pargs);
-
     Ok(Args {
         data_dir: init_data_directory(&datadir_over)?,
         plugin_paths: get_dirs_files(&mut pargs, "--plugins")?,
