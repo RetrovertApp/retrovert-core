@@ -44,8 +44,6 @@ impl Core {
         let vfs = Vfs::new();
         let plugin_service = PluginService::new("core", vfs.clone());
 
-        dbg!(&args.plugin_paths);
-
         // Add plugins
         for path in &args.plugin_paths {
             plugins.add_plugins_from_path(path, &plugin_service);
