@@ -1,7 +1,7 @@
 use std::os::raw::c_void;
 use vfs::{Vfs, RecvMsg};
 use std::{thread, ptr, time::Duration};
-use log::{error, info};
+use log::{error};
 
 use crate::ffi_gen::IoReadUrlResult;
 
