@@ -15,10 +15,10 @@ plugin_types = { path = "../plugin_types" }
 services = { path = "../services" }
 log = "0.4"
 anyhow = "1.0"
-libloading = "0.7.3"
+libloading = "0.8"
 walkdir = "2"
 cfixed-string = "1"
-pico-args = "0.4"
+pico-args = "0.5"
 parking_lot = "0.12"
 
 toml = "0.5"

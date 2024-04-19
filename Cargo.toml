@@ -1,2 +1,3 @@
 [workspace]
 members = ["core", "services", "plugin_types"]
+resolver = "2"
