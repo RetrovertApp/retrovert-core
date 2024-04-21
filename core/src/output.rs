@@ -24,7 +24,7 @@ unsafe extern "C" fn output_callback(user_data: *mut c_void, output_data: *mut c
             output.copy_from_slice(&data);
             return frames;
         }
-        Ok(PlaybackReply::NoData) => trace!("No data has been generated yet"),
+        //Ok(PlaybackReply::NoData) => trace!("No data has been generated yet"),
         Ok(PlaybackReply::InvalidRequest) => error!("Invalid request. No data was generated"),
         Ok(PlaybackReply::OutOfData) => error!("Ran out of data (likel requesting too fast/plaback is too slow. No data will be generated)"),
         Err(e) => error!("Got error when reading from playback {:?} No data will be generated.", e),

@@ -76,7 +76,7 @@ pub struct PlaybackPluginInstance {
     pub plugin: PlaybackPlugin,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ResamplePluginInstance {
     pub user_data: *mut c_void,
     pub plugin: ResamplePlugin,
@@ -177,13 +177,13 @@ impl PlaybackInternal {
         })
     }
 
-    fn create_default_resample_plugin(resample_plugis: &ResamplePlugins) -> Result<ResamplePluginInstance> {
-        let resample_plugins = resample_plugis.read();
+    fn create_default_resample_plugin(resample_plugins: &ResamplePlugins) -> Result<ResamplePluginInstance> {
+        let resample_plugins = resample_plugins.read();
 
         if resample_plugins.is_empty() {
             bail!("No resample plugin(s) found. Unable to setup Retrovert playback");
         }
-
+        
         let op = &resample_plugins[0];
 
         let plugin_name = op.plugin_funcs.get_name();
@@ -193,16 +193,15 @@ impl PlaybackInternal {
         if user_data.is_null() {
             bail!("{} : unable to allocate instance", plugin_name);
         }
-
+        
         let config = plugin_types::ConvertConfig { input: DEFAULT_AUDIO_FORMAT, output: DEFAULT_AUDIO_FORMAT };
 
         unsafe { (op.plugin_funcs.set_config)(user_data, &config); }
-
+        
         trace!("Created default resample plugin: {}", plugin_name);
 
         Ok(ResamplePluginInstance { user_data, plugin: op.plugin_funcs })
     }
-
 }
 
 // Send back data to the requester if possible
@@ -419,8 +418,6 @@ impl Playback {
         let (channel, thread_recv) = unbounded::<PlaybackMessage>();
 
         let mut state = PlaybackInternal::new(resample_plugins)?;
-
-        trace!("Playback create");
 
         // Setup worker thread
         thread::Builder::new()

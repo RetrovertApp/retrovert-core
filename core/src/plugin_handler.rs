@@ -152,6 +152,7 @@ impl Plugins {
 
     pub fn add_plugins_from_path(&mut self, path: &str, base_service: &PluginService) {
         trace!("Searching path {:} for plugins", path);
+
         for entry in WalkDir::new(path).into_iter().flatten() {
             if Self::check_file_type(&entry) {
                 self.add_plugin(entry.path().to_str().unwrap(), base_service);
