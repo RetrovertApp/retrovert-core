@@ -68,8 +68,8 @@ impl Core {
         self.playlist.play_url(url);
     }
 
-    pub fn update(&mut self) {
-        //self.pla
+    pub fn update(&mut self) -> u64 {
+        self.output.get_position()
     }
 }
 
@@ -190,9 +190,9 @@ pub unsafe fn core_destroy(core: *mut Core, _prepare_reload: bool) {
 ///
 /// Foobar
 #[no_mangle]
-pub unsafe fn core_update(core: *mut Core) {
+pub unsafe fn core_update(core: *mut Core) -> u64 {
     let core: &mut Core = &mut *core;
-    core.update();
+    core.update()
 }
 
 /// # Safety

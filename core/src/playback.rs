@@ -134,7 +134,8 @@ pub struct PlaybackInternal {
 
 pub enum PlaybackMessage {
     QueuePlayback(PlaybackPluginInstance, Sender<PlaybackReply>),
-    GetData(plugin_types::AudioFormat, usize, Sender<PlaybackReply>)
+    GetData(plugin_types::AudioFormat, usize, Sender<PlaybackReply>),
+    GetTrackerPosition(Sender<PlaybackReply>)
 }
 
 pub enum PlaybackReply {
@@ -148,6 +149,8 @@ pub enum PlaybackReply {
     InvalidRequest,
     /// This will happen if no data has been generated yet 
     NoData,
+    /// Returns data back to the requster
+    TrackerPosition(u64),
     /// Returns data back to the requster
     Data(Box<[u8]>),
 }
@@ -296,6 +299,19 @@ fn incoming_msg(state: &mut PlaybackInternal, msg: &PlaybackMessage) {
 
         PlaybackMessage::GetData(format, frames, msg) => {
             get_data(state, *format, *frames, msg);
+        }
+
+        PlaybackMessage::GetTrackerPosition(msg) => {
+            if state.players.is_empty() {
+                msg.send(PlaybackReply::NoData).unwrap();
+                return;
+            }
+
+            let player = &state.players[0].0;
+            let mut output_data = [0u8; 8];
+            unsafe { (player.plugin.event)(player.user_data, output_data.as_mut_ptr(), 8) };
+            let pos = u64::from_le_bytes(output_data);
+            msg.send(PlaybackReply::TrackerPosition(pos)).unwrap();
         }
     }
 }

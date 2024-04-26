@@ -74,6 +74,19 @@ impl Output {
         }
     }
 
+    pub fn get_position(&mut self) -> u64 {
+        let (playback_send, self_recv) = bounded::<PlaybackReply>(1);
+
+        if self.playback_send.send(PlaybackMessage::GetTrackerPosition(playback_send)).is_err() {
+            error!("Unable to communitate with playback, no data will be generated");
+        }
+
+        match self_recv.recv() {
+            Ok(PlaybackReply::TrackerPosition(data)) => data,
+            _ => 0,
+        }
+    }
+
     pub fn create_default_output(&mut self) {
         // TODO: Error handling
         let output_plugs = self.output_plugins.read();
@@ -95,6 +108,5 @@ impl Output {
         unsafe { ((op.plugin_funcs).start)(user_data, callback) };
 
         self.current_output = Some(PluginOutput { user_data, plugin: op.plugin_funcs });
-
     }
 }
