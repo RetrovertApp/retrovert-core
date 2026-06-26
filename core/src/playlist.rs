@@ -139,7 +139,9 @@ fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: &[u8], pr
             trace!("{} : reports that it can play file. Trying to create player instance for playback", plugin_name); 
 
             let service_funcs = player.service.get_c_api();
-            let user_data = unsafe { ((player.plugin_funcs).create)(service_funcs) };
+            let user_data = unsafe {
+                (player.plugin_funcs.create.unwrap())(service_funcs as *const _)
+            };
 
             if user_data.is_null() {
                 error!("{} : unable to allocate instance, skipping playback", plugin_name); 
@@ -149,11 +151,13 @@ fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: &[u8], pr
             // TODO: Fix settings
             let c_name = CFixedString::from_str(&url);
             //let open_state = unsafe { ((player.plugin_funcs).open_from_memory)(user_data, data.as_ptr(), data.len() as _, 0, ptr::null()) };
-            let open_state = unsafe { ((player.plugin_funcs).open)(user_data, c_name.as_ptr(), 0, service_funcs) };
+            let open_state = unsafe {
+                (player.plugin_funcs.open.unwrap())(user_data, c_name.as_ptr(), 0, service_funcs as *const _)
+            };
 
             if open_state < 0 {
-                error!("{} : Unable to create playback", plugin_name); 
-                unsafe { ((player.plugin_funcs).destroy)(user_data) };
+                error!("{} : Unable to create playback", plugin_name);
+                unsafe { (player.plugin_funcs.destroy.unwrap())(user_data) };
                 continue;
             }
 

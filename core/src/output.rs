@@ -7,8 +7,8 @@ use crate::plugin_handler::{OutputPlugins};
 
 // This is called from output plugins. The purpose of it is that it will fetch data from the decoder thread.
 // We use a separate thread for decoding as it makes it possible to buffer more data and to detect buffer underflow
-unsafe extern "C" fn output_callback(user_data: *mut c_void, output_data: *mut c_void, format: AudioFormat, frames: u32) -> u32 {
-    let callback: &mut OutputCallback = &mut *(user_data as *mut OutputCallback);
+extern "C" fn output_callback(user_data: *mut c_void, output_data: *mut c_void, format: AudioFormat, frames: u32) -> u32 {
+    let callback: &mut OutputCallback = unsafe { &mut *(user_data as *mut OutputCallback) };
 
     let (playback_send, self_recv) = bounded::<PlaybackReply>(1);
 
@@ -20,7 +20,7 @@ unsafe extern "C" fn output_callback(user_data: *mut c_void, output_data: *mut c
     match self_recv.recv() {
         Ok(PlaybackReply::Data(data)) => {
             let total_size = crate::playback::get_byte_size_format(format, frames as usize);
-            let output = std::slice::from_raw_parts_mut(output_data as *mut u8, total_size);
+            let output = unsafe { std::slice::from_raw_parts_mut(output_data as *mut u8, total_size) };
             output.copy_from_slice(&data);
             return frames;
         }
@@ -58,7 +58,7 @@ impl Output {
         let ffi_callback = Box::leak(Box::new(
             PlaybackCallback {
                 user_data: callback_data as *mut _ as *mut c_void,
-                callback: output_callback,
+                callback: Some(output_callback),
             }
         ));
 
@@ -95,17 +95,19 @@ impl Output {
 
         let plugin_name = op.plugin_funcs.get_name();
         let service_funcs = op.service.get_c_api();
-        let user_data = unsafe { ((op.plugin_funcs).create)(service_funcs) };
+        let user_data = unsafe {
+            (op.plugin_funcs.create.unwrap())(service_funcs as *const _)
+        };
 
         if user_data.is_null() {
-            error!("{} : unable to allocate instance, skipping playback", plugin_name); 
+            error!("{} : unable to allocate instance, skipping playback", plugin_name);
             return;
         }
 
         trace!("Created default output: {}", plugin_name);
 
         let callback = self.new_callback();
-        unsafe { ((op.plugin_funcs).start)(user_data, callback) };
+        unsafe { (op.plugin_funcs.start.unwrap())(user_data, callback) };
 
         self.current_output = Some(PluginOutput { user_data, plugin: op.plugin_funcs });
     }

@@ -50,8 +50,8 @@ impl PlaybackPlugin {
     ) -> bool {
         let c_filename = CFixedString::from_str(filename);
         let res = unsafe {
-            ((self.plugin_funcs).probe_can_play)(
-                data.as_ptr(),
+            (self.plugin_funcs.probe_can_play.unwrap())(
+                data.as_ptr() as *mut _,
                 buffer_len as _,
                 c_filename.as_ptr(),
                 file_size,
@@ -96,9 +96,9 @@ macro_rules! add_plugin {
 
             let service = PluginService::clone_with_log_name($base_service, &full_name);
 
-            if plugin_funcs.static_init as usize != 0 {
+            if let Some(static_init) = plugin_funcs.static_init {
                 unsafe {
-                    (plugin_funcs.static_init)(service.get_c_api());
+                    static_init(service.get_c_api() as *const _);
                 }
             }
 

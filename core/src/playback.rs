@@ -11,7 +11,6 @@ use crossbeam_channel::{Sender, Receiver, unbounded};
 use log::{error, trace};
 use anyhow::{Result, bail};
 use std::{
-    ptr,
     thread,
     os::raw::c_void,
 };
@@ -191,15 +190,17 @@ impl PlaybackInternal {
 
         let plugin_name = op.plugin_funcs.get_name();
         let service_funcs = op.service.get_c_api();
-        let user_data = unsafe { ((op.plugin_funcs).create)(service_funcs) };
+        let user_data = unsafe {
+            (op.plugin_funcs.create.unwrap())(service_funcs as *const _)
+        };
 
         if user_data.is_null() {
             bail!("{} : unable to allocate instance", plugin_name);
         }
-        
+
         let config = plugin_types::ConvertConfig { input: DEFAULT_AUDIO_FORMAT, output: DEFAULT_AUDIO_FORMAT };
 
-        unsafe { (op.plugin_funcs.set_config)(user_data, &config); }
+        unsafe { (op.plugin_funcs.set_config.unwrap())(user_data, &config); }
         
         trace!("Created default resample plugin: {}", plugin_name);
 
@@ -212,7 +213,7 @@ fn get_data(state: &mut PlaybackInternal, format: AudioFormat, frames: usize, ms
     // Update format if it differs
     if state.last_request_format != format {
         let config = ConvertConfig { input: DEFAULT_AUDIO_FORMAT, output: format };
-        unsafe { (state.output_resampler.plugin.set_config)(state.output_resampler.user_data, &config) };
+        unsafe { (state.output_resampler.plugin.set_config.unwrap())(state.output_resampler.user_data, &config) };
         state.last_request_format = format;
     }
 
@@ -241,7 +242,7 @@ fn get_data(state: &mut PlaybackInternal, format: AudioFormat, frames: usize, ms
         //trace!("converting from {:?} -> {:?}", DEFAULT_AUDIO_FORMAT, format);
 
         let required_input_frames = unsafe { 
-            (state.output_resampler.plugin.get_required_input_frame_count)(state.output_resampler.user_data, frames as _) 
+            (state.output_resampler.plugin.get_required_input_frame_count.unwrap())(state.output_resampler.user_data, frames as _)
         };
 
         let bytes_size = get_byte_size_format(DEFAULT_AUDIO_FORMAT, required_input_frames as _);
@@ -249,7 +250,7 @@ fn get_data(state: &mut PlaybackInternal, format: AudioFormat, frames: usize, ms
         // if read are within the ring-buffer range we can just convert directly from it to the output
         if (read_index + bytes_size) < ring_buffer_len {
             unsafe {
-                (state.output_resampler.plugin.convert)(state.output_resampler.user_data, 
+                (state.output_resampler.plugin.convert.unwrap())(state.output_resampler.user_data,
                     dest.as_mut_ptr() as _, 
                     state.ring_buffer[read_index..].as_mut_ptr() as _, 
                     required_input_frames as _);
@@ -264,7 +265,7 @@ fn get_data(state: &mut PlaybackInternal, format: AudioFormat, frames: usize, ms
             state.temp_gen[1][rem_count..bytes_size].copy_from_slice(&state.ring_buffer[0..rest_count]);
 
             unsafe {
-                (state.output_resampler.plugin.convert)(state.output_resampler.user_data, 
+                (state.output_resampler.plugin.convert.unwrap())(state.output_resampler.user_data,
                     dest.as_mut_ptr() as _, 
                     state.temp_gen[1].as_mut_ptr() as _, 
                     required_input_frames as _);
@@ -309,7 +310,7 @@ fn incoming_msg(state: &mut PlaybackInternal, msg: &PlaybackMessage) {
 
             let player = &state.players[0].0;
             let mut output_data = [0u8; 8];
-            unsafe { (player.plugin.event)(player.user_data, output_data.as_mut_ptr(), 8) };
+            unsafe { (player.plugin.event.unwrap())(player.user_data, output_data.as_mut_ptr(), 8) };
             let pos = u64::from_le_bytes(output_data);
             msg.send(PlaybackReply::TrackerPosition(pos)).unwrap();
         }
@@ -368,19 +369,16 @@ fn update(state: &mut PlaybackInternal) -> bool {
         format: state.internal_format,
         frame_count: 1024,
         status: ReadStatus::DecodingRequest,
-        virtual_channel_count: 0,
     };
 
     let read_data = ReadData {
         channels_output: state.temp_gen[0].as_mut_ptr() as _,
-        virtual_channel_output: ptr::null_mut(),
         channels_output_max_bytes_size: state.temp_gen[0].len() as _,
-        virtual_channels_output_max_bytes_size: 0,
         info: read_info,
     };
 
     // Read data from the plugin
-    let info = unsafe { (player.plugin.read_data)(player.user_data, read_data) };
+    let info = unsafe { (player.plugin.read_data.unwrap())(player.user_data, read_data) };
 
     // can just copy the data to the ringbuffer
     if info.format == state.internal_format {
@@ -391,19 +389,19 @@ fn update(state: &mut PlaybackInternal) -> bool {
             dbg!(state.internal_format);
             dbg!(info.format);
             let config = ConvertConfig { input: info.format, output: state.internal_format };
-            unsafe { (state.plugin_resampler.plugin.set_config)(state.plugin_resampler.user_data, &config) };
+            unsafe { (state.plugin_resampler.plugin.set_config.unwrap())(state.plugin_resampler.user_data, &config) };
             state.plugin_format = info.format;
         }
 
         let required_input_frames = unsafe { 
-            (state.plugin_resampler.plugin.get_required_input_frame_count)(
-                state.plugin_resampler.user_data, 
+            (state.plugin_resampler.plugin.get_required_input_frame_count.unwrap())(
+                state.plugin_resampler.user_data,
                 info.frame_count as _) 
         };
 
         // if read are within the ring-buffer range we can just convert directly from it to the output
         let frame_count = unsafe {
-            (state.plugin_resampler.plugin.convert)(state.plugin_resampler.user_data, 
+            (state.plugin_resampler.plugin.convert.unwrap())(state.plugin_resampler.user_data,
                 state.temp_gen[1].as_mut_ptr() as _, 
                 state.temp_gen[0].as_mut_ptr() as _, 
                 required_input_frames as _)
@@ -421,7 +419,7 @@ fn update(state: &mut PlaybackInternal) -> bool {
     if info.status == ReadStatus::Finished {
         let player = &state.players[0].0;
         state.players[0].1.send(PlaybackReply::PlaybackEnded).unwrap();
-        unsafe { (player.plugin.destroy)(player.user_data) };
+        unsafe { (player.plugin.destroy.unwrap())(player.user_data) };
         state.players.remove(0);
         trace!("Playback finished - players left {}", state.players.len());
     }
