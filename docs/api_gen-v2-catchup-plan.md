@@ -8,6 +8,31 @@
 
 **Tech Stack:** Rust (edition 2021), Flowi `api_gen` (Pest-based IDL→C+Rust), `libloading`, Cargo.
 
+## Start here (bootstrap for a clean context)
+
+You may be running this with no prior conversation. Everything you need is committed or in the repos.
+
+- **Read first (the "why"), all in `~/code/projects/retrovert/repos/retrovert-core`:**
+  `CONTEXT.md` (glossary: Retrovert vs RePlay, Plugin ABI, Service, Flowi), `docs/api_gen-setup-design.md`
+  (the design + rationale), `docs/adr/0001-generated-abi-committed-generator-lives-with-app.md`.
+- **Repos & branches involved** (all under `~/code/projects/`):
+  | Repo | Path | Branch to use | Role |
+  |---|---|---|---|
+  | flowi | `~/code/projects/flowi` | `api-gen-config` (create) | owns `api_gen`; Task 1 refactors it |
+  | retrovert_api | `~/code/projects/retrovert/repos/retrovert_api` | `api-gen-defs` (create) | `.def` source + generated C headers |
+  | retrovert (app) | `~/code/projects/retrovert/repos/retrovert` | `abi-gen-tool` (create) | hosts the codegen bin; path-deps flowi |
+  | retrovert-core | `~/code/projects/retrovert/repos/retrovert-core` | `api-gen-v2` (create) | generated Rust FFI consumer |
+- **Order matters:** do Task 1 first and keep flowi **on its `api-gen-config` branch** for the rest of
+  the run — Task 3's `path = ".../flowi/rust/tools/api_gen"` dep compiles against whatever is checked out.
+- **Resolving an `api_gen` parse error** (Task 3 Step 4): consult the cheat-sheet in this plan first;
+  for anything it doesn't cover, read flowi's grammar `~/code/projects/flowi/rust/tools/api_gen/src/api.pest`
+  and the worked example `~/code/projects/flowi/rust/tools/api_gen/api/vfs_plugin.def` (a vtable + `extern
+  opaque` + enums — the closest analog). Primitives/pointers are fixed-width; there is no IDL `int` (use `i32`).
+- **Verification inputs you must locate** (Task 5, not pinned here): a compiled v2 playback plugin (build
+  output under `playback_plugins`), a sample module file to play, and `retrovert-console`'s CLI — check
+  its `--help`/arg parsing in `retrovert-core/retrovert-console` (or the binary's `show_args`).
+- **Run the codegen** from the retrovert app repo root: `cargo run --manifest-path tools/abi_gen/Cargo.toml`.
+
 ## Global Constraints
 
 - **Byte-compat is the contract.** The regenerated `plugin_types` must be layout-identical to the v2 C ABI in `retrovert_api/include/retrovert/*.h`. The decisive test is loading a real compiled v2 plugin; the C-surface diff and the Rust `size_of`/`offset_of` asserts are the static guards.
