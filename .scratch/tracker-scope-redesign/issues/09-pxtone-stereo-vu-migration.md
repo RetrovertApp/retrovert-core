@@ -1,6 +1,6 @@
 # pxtone migration (stereo scope + VU capability)
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Est. context: ~55k
 
@@ -16,11 +16,20 @@ Risk/decision note: pxtone's current scope is a mono per-Unit passthrough to its
 
 ## Acceptance criteria
 
-- [ ] Plugin advertises `Scope | Vu`; at least one scope channel reports `scope_width = 2` and returns interleaved stereo samples.
-- [ ] `set_scope_enabled(false)` stops capture (no hidden auto-on); `set_scope_enabled(true)` resumes.
-- [ ] `get_vu` returns per-channel levels when `Vu` is advertised.
-- [ ] Harness test asserts stereo width, interleaving, the on/off switch, and VU presence.
+- [x] Plugin advertises `Scope | Vu`; at least one scope channel reports `scope_width = 2` and returns interleaved stereo samples.
+- [x] `set_scope_enabled(false)` stops capture (no hidden auto-on); `set_scope_enabled(true)` resumes.
+- [x] `get_vu` returns per-channel levels when `Vu` is advertised.
+- [x] Harness test asserts stereo width, interleaving, the on/off switch, and VU presence.
 
 ## Blocked by
 
 - #03 (committed dlopen viz harness).
+
+## Comments
+
+### 2026-06-27 — Implemented
+- Commits: playback-pxtone `viz: migrate to v2 vtable (stereo scope + VU)`; retrovert-core `viz: 09 migrate pxtone to the new viz vtable`
+- All scope channels report `scope_width = 2`; the moo scope-capture patch now keeps per-unit L/R separate (was collapsed to mono) and `moo_get_scope_data` returns interleaved samples. VU is the per-channel peak of the scope ring, so no extra lib code. pxtone proved cheap enough for real stereo — no v2m fallback.
+- Reviewers: 2 (combined correctness+quality, test coverage)
+- Rounds: 1, 0 findings across the loop
+- Note: the core decode-thread snapshot (`build_snapshot`) sizes the VU buffer by `pattern_channel_count`, which is 0 for a scope-only plugin, so production VU would currently come back empty for pxtone. The harness exercises `get_vu` directly and passes. Surfacing as a possible core (#05) follow-up — out of scope for this issue.
