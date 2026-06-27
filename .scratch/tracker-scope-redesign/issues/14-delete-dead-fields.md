@@ -28,4 +28,4 @@ If the 28-plugin initializer edits + rebuilds push this past budget, split the d
 
 ## Blocked by
 
-- #04, #05, #06, #07, #08, #09, #10, #11, #12, #13 (all plugins migrated + core snapshot in place, so nothing references the old fields).
+- #04, #05, #06, #07, #08, #09, #10, #11, #12, #13, #15 (all plugins migrated + core snapshot in place, so nothing references the old fields).
