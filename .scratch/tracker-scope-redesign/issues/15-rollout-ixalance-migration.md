@@ -1,6 +1,6 @@
 # Rollout — ixalance migration (full pattern-cell tracker)
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Est. context: ~90k
 
@@ -33,13 +33,25 @@ mechanical scope-only stub:
 
 ## Acceptance criteria
 
-- [ ] ixalance advertises the correct caps + scroll mode and a complete column schema.
-- [ ] `get_cells(channel=-1, …)` returns a window of cells with both raw values and
+- [x] ixalance advertises the correct caps + scroll mode and a complete column schema.
+- [x] `get_cells(channel=-1, …)` returns a window of cells with both raw values and
       rendered fixed-width text matching the pattern of a known IXS module.
-- [ ] Pattern + scope channel counts/names reported; scope verified non-silent via
+- [x] Pattern + scope channel counts/names reported; scope verified non-silent via
       the harness, silent until `set_scope_enabled(true)`.
-- [ ] ixalance no longer references the old tracker vtable slots (ready for #14).
+- [x] ixalance no longer references the old tracker vtable slots (ready for #14).
 
 ## Blocked by
 
 - #03 (committed dlopen viz harness).
+
+## Comments
+
+### 2026-06-27 — Implemented
+- Commit: retrovert-core "viz: 15 migrate ixalance to the new viz vtable"
+- Plugin source: `playback-ixalance/ixalance_plugin.cpp` migrated in working tree
+  (committed in bulk at the ABI break, #14, like the other cohorts).
+- Reviewers: 2 (correctness+quality, test-coverage)
+- Rounds: 2, 4 findings across the loop (1 med + 2 low test-coverage gaps; 1
+  non-blocking correctness note — all fixed)
+- Verified: real IXS fixture (`Ixalance/Crystal Score/andes.ixs`) at the harness
+  default path; `cargo test -p rv_core --test viz_ixalance` passes.
