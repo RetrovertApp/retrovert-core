@@ -8,3 +8,5 @@ license = "MIT"
 
 [dependencies]
 services = { path = "../services" }
+# Generated RVVizCaps bitset (api_gen emits a `bitflags::bitflags!` set for #[attributes(bitflags)]).
+bitflags = "2"
