@@ -1,6 +1,6 @@
 # tfmx migration (per-channel non-synchronized scrolling)
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Est. context: ~56k
 
@@ -14,11 +14,19 @@ Migrate `playback-tfmx` to prove the **per-channel non-synchronized** scrolling 
 
 ## Acceptance criteria
 
-- [ ] tfmx advertises `PerChannel` scroll mode; `get_channel_rows` returns independent per-channel rows.
-- [ ] `get_cells` per channel returns windowed cells with consistent raw + rendered text (no letter/raw inconsistency leaking to the host).
-- [ ] Scope works through the new `get_scope_data`.
-- [ ] Harness test asserts per-channel scrolling + cell contents on a known TFMX module.
+- [x] tfmx advertises `PerChannel` scroll mode; `get_channel_rows` returns independent per-channel rows.
+- [x] `get_cells` per channel returns windowed cells with consistent raw + rendered text (no letter/raw inconsistency leaking to the host).
+- [x] Scope works through the new `get_scope_data`.
+- [x] Harness test asserts per-channel scrolling + cell contents on a known TFMX module.
 
 ## Blocked by
 
 - #03 (committed dlopen viz harness).
+
+## Comments
+
+### 2026-06-27 — Implemented
+- Commit (retrovert-core): viz: 06 migrate tfmx to the new viz vtable
+- Plugin change (playback-tfmx `tfmx_plugin.c` + vendored ABI headers) left uncommitted in the working tree, mirroring the openmpt (#04) precedent.
+- Reviewers: 3 (correctness+quality, test-coverage, engine-fidelity)
+- Rounds: 2, 3 findings across the loop (all test-coverage, applied)
