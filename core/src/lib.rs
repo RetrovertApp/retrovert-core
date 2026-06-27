@@ -10,6 +10,7 @@ pub mod output;
 pub mod playback;
 pub mod plugin_handler;
 pub mod playlist;
+pub mod visualization;
 
 use plugin_handler::Plugins;
 use playlist::Playlist;

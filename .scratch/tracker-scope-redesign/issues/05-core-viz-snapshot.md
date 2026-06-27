@@ -1,6 +1,6 @@
 # Core decode-thread visualization snapshot + UI handoff
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Est. context: ~60k
 
@@ -16,11 +16,18 @@ Test the snapshot seam without a UI and without depending on a specific real plu
 
 ## Acceptance criteria
 
-- [ ] Core calls the viz getters on the decode thread (same thread as `read_data`), not the UI thread.
-- [ ] A frame-stamped snapshot (carrying `output_frame`) is built by value and made available to a consumer thread.
-- [ ] Snapshot fields match a known stub plugin's outputs in a test (no real UI, no dlopen required).
-- [ ] No data races: the UI side never touches plugin state directly.
+- [x] Core calls the viz getters on the decode thread (same thread as `read_data`), not the UI thread.
+- [x] A frame-stamped snapshot (carrying `output_frame`) is built by value and made available to a consumer thread.
+- [x] Snapshot fields match a known stub plugin's outputs in a test (no real UI, no dlopen required).
+- [x] No data races: the UI side never touches plugin state directly.
 
 ## Blocked by
 
 - #02 (Rust bindings for the new viz vtable). Uses the #03 harness scaffolding where convenient but can run in parallel with #04 (tests via a stub vtable, not openmpt).
+
+## Comments
+
+### 2026-06-27 — Implemented
+- Commit: viz: 05 decode-thread snapshot + UI handoff
+- Reviewers: 2 (combined correctness+quality, test coverage)
+- Rounds: 2, 5 findings across the loop (2 gating fixed, 3 coverage notes closed)

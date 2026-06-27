@@ -10,12 +10,19 @@ use plugin_types::{
 use crossbeam_channel::{Sender, Receiver, unbounded};
 use log::{error, trace};
 use anyhow::{Result, bail};
+use parking_lot::Mutex;
 use std::{
     thread,
     os::raw::c_void,
+    sync::Arc,
 };
 
 use crate::plugin_handler::ResamplePlugins;
+use crate::visualization::{build_snapshot, VizSnapshot};
+
+/// Latest visualization snapshot, published by the decode thread and read by the
+/// UI thread. `None` until the active plugin produces its first frame.
+pub type VizSnapshotSlot = Arc<Mutex<Option<VizSnapshot>>>;
 
 #[derive(Default)]
 pub struct PlaybackSettings {
@@ -50,7 +57,9 @@ unsafe impl Send for ResamplePluginInstance {}
 #[derive(Clone, Debug)]
 pub struct Playback {
     pub channel: Sender<PlaybackMessage>,
-} 
+    /// Shared with the decode thread; the UI reads the latest snapshot from here.
+    pub viz_snapshot: VizSnapshotSlot,
+}
 
 pub struct PlaybackHandle {
     pub channel: Receiver<PlaybackReply>,
@@ -125,10 +134,14 @@ pub struct PlaybackInternal {
     write_index: Index,
     // Format used for the internal ring-buffer
     internal_format: AudioFormat,
-    // Format used for the current playing plugin 
+    // Format used for the current playing plugin
     plugin_format: AudioFormat,
     /// TODO: Keep a cache of these?
     last_request_format: AudioFormat,
+    /// Cumulative frames decoded for the active plugin; stamped onto each snapshot.
+    output_frame: u64,
+    /// Latest viz snapshot, shared with the UI thread.
+    viz_snapshot: VizSnapshotSlot,
 }
 
 pub enum PlaybackMessage {
@@ -155,7 +168,7 @@ pub enum PlaybackReply {
 }
 
 impl PlaybackInternal {
-    fn new(resample_plugins: ResamplePlugins) -> Result<PlaybackInternal> {
+    fn new(resample_plugins: ResamplePlugins, viz_snapshot: VizSnapshotSlot) -> Result<PlaybackInternal> {
         let output_resampler = Self::create_default_resample_plugin(&resample_plugins)?;
         let plugin_resampler = Self::create_default_resample_plugin(&resample_plugins)?;
 
@@ -174,8 +187,10 @@ impl PlaybackInternal {
             read_index: Index::default(),
             write_index: Index::default(),
             internal_format: DEFAULT_AUDIO_FORMAT,
-            last_request_format: DEFAULT_AUDIO_FORMAT, 
+            last_request_format: DEFAULT_AUDIO_FORMAT,
             plugin_format: DEFAULT_AUDIO_FORMAT,
+            output_frame: 0,
+            viz_snapshot,
         })
     }
 
@@ -295,6 +310,16 @@ fn incoming_msg(state: &mut PlaybackInternal, msg: &PlaybackMessage) {
     match msg {
         // TODO: Implement
         PlaybackMessage::QueuePlayback(playback, msg) => {
+            // ponytail: single-file case — reset the frame stamp when the queue
+            // was empty; a deeper queue keeps the active plugin's count.
+            if state.players.is_empty() {
+                state.output_frame = 0;
+                *state.viz_snapshot.lock() = None;
+            }
+            // Capture scope buffers during read_data if the plugin supports it.
+            if let Some(f) = playback.plugin.set_scope_enabled {
+                f(playback.user_data, true);
+            }
             state.players.push((playback.clone(), msg.clone()));
         },
 
@@ -361,7 +386,8 @@ fn update(state: &mut PlaybackInternal) -> bool {
         return true;
     }
 
-    let player = &state.players[0].0;
+    // Owned so the viz snapshot can read the plugin while `state` is mutated below.
+    let player = state.players[0].0.clone();
 
     // TODO: Use configured audio format
     // TODO: Fix hard-coded frames-count
@@ -379,6 +405,15 @@ fn update(state: &mut PlaybackInternal) -> bool {
 
     // Read data from the plugin
     let info = unsafe { (player.plugin.read_data.unwrap())(player.user_data, read_data) };
+
+    // Interleaved with read_data on this (decode) thread: stamp the new output
+    // position and copy the plugin's viz getters into a value-semantic snapshot
+    // for the UI thread. ponytail: rebuilt every decode chunk; throttle if a
+    // profile says it matters.
+    state.output_frame += info.frame_count as u64;
+    if let Some(snapshot) = build_snapshot(&player.plugin, player.user_data, state.output_frame) {
+        *state.viz_snapshot.lock() = Some(snapshot);
+    }
 
     // can just copy the data to the ringbuffer
     if info.format == state.internal_format {
@@ -431,7 +466,8 @@ impl Playback {
     pub fn new(resample_plugins: ResamplePlugins) -> Result<Playback> {
         let (channel, thread_recv) = unbounded::<PlaybackMessage>();
 
-        let mut state = PlaybackInternal::new(resample_plugins)?;
+        let viz_snapshot: VizSnapshotSlot = Arc::new(Mutex::new(None));
+        let mut state = PlaybackInternal::new(resample_plugins, viz_snapshot.clone())?;
 
         // Setup worker thread
         thread::Builder::new()
@@ -450,7 +486,7 @@ impl Playback {
 
         trace!("Playback create: done");
 
-        Ok(Playback { channel })
+        Ok(Playback { channel, viz_snapshot })
     }
 
 }
