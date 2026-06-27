@@ -1,6 +1,6 @@
 # libvgm migration (synthesized + windowed; delete native_pattern_data)
 
-Status: ready-for-agent
+Status: done
 Type: AFK
 Est. context: ~79k
 
@@ -14,11 +14,18 @@ Migrate `playback-libvgm` to prove the **synthesized + windowed** model and to r
 
 ## Acceptance criteria
 
-- [ ] `native_pattern_data` is gone from libvgm; cells are served via `get_cells` from synthesized data.
-- [ ] libvgm advertises per-channel scrolling + `WholeSongKnown`; windowed `get_cells` returns correct raw + text.
-- [ ] Scope works through the new `get_scope_data`.
-- [ ] Builds and passes the harness test in both `HAS_VGM_PATTERN` configurations.
+- [x] `native_pattern_data` is gone from libvgm; cells are served via `get_cells` from synthesized data.
+- [x] libvgm advertises per-channel scrolling + `WholeSongKnown`; windowed `get_cells` returns correct raw + text.
+- [x] Scope works through the new `get_scope_data`.
+- [x] Builds and passes the harness test in both `HAS_VGM_PATTERN` configurations.
 
 ## Blocked by
 
 - #03 (committed dlopen viz harness).
+
+## Comments
+
+### 2026-06-27 — Implemented
+- Plugin migration (libvgm_plugin.cpp + CMakeLists `LIBVGM_VGM_PATTERN` option) left uncommitted in the playback-libvgm working tree, matching the #04/#06 rollout. Committed here: the `core/tests/viz_libvgm.rs` harness test.
+- libvgm now advertises PerChannel + WholeSongKnown, serves windowed `get_cells` from the synthesized `VgmPattern` (native_pattern_data deleted), standardizes effect encoding, and exposes scope via `get_scope_samples`. Verified against both `HAS_VGM_PATTERN` build configs.
+- Reviewers: 3 (combined correctness+quality, test-coverage, whole-file). Rounds: 2, 5 findings across the loop (3 fixed: orphaned debug statics, scope auto-enable mirror flag, get_vu doc; 2 test/coverage notes folded in). 4 pre-existing structural items in libvgm_plugin.cpp deferred to a follow-on cleanup pass.
