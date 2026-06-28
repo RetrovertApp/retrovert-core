@@ -8,7 +8,7 @@ use cfixed_string::CFixedString;
 use libloading::{Library, Symbol};
 use plugin_types::{
     AudioFormat, AudioStreamFormat, ChannelDesc, PlaybackPlugin, ReadData, ReadInfo, ReadStatus,
-    RVService, ScrollMode, VizCaps, VizStructure,
+    RVService, ScrollMode, VizCaps, VizInfo,
 };
 use services::PluginService;
 use std::path::PathBuf;
@@ -81,8 +81,8 @@ fn pxtone_viz_vtable() {
     assert_eq!(rc, 0, "open failed for {}", module.display());
 
     // --- structure: scope + VU, no pattern grid ---
-    let mut st = VizStructure { caps: 0, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 0, scope_channel_count: 0, column_count: 0 };
-    assert!((plugin.get_structure.unwrap())(user_data, &mut st));
+    let mut st = VizInfo { caps: 0, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 0, scope_channel_count: 0, column_count: 0 };
+    assert!((plugin.viz_info.unwrap())(user_data, &mut st));
     assert!(st.caps & VizCaps::SCOPE.bits() != 0, "pxtone must advertise Scope");
     assert!(st.caps & VizCaps::VU.bits() != 0, "pxtone must advertise Vu");
     assert!(st.caps & VizCaps::PATTERN_CELLS.bits() == 0, "scope-only: must NOT advertise PatternCells");
@@ -93,15 +93,15 @@ fn pxtone_viz_vtable() {
     let scope_channels = st.scope_channel_count as usize;
 
     // --- scope-only contract: pattern getters are NULL ---
-    assert!(plugin.get_columns.is_none(), "scope-only: get_columns must be NULL");
-    assert!(plugin.get_pattern_channels.is_none(), "scope-only: get_pattern_channels must be NULL");
-    assert!(plugin.get_position.is_none(), "scope-only: get_position must be NULL");
-    assert!(plugin.get_channel_rows.is_none(), "scope-only: get_channel_rows must be NULL");
-    assert!(plugin.get_cells.is_none(), "scope-only: get_cells must be NULL");
+    assert!(plugin.tracker_columns.is_none(), "scope-only: tracker_columns must be NULL");
+    assert!(plugin.tracker_channels.is_none(), "scope-only: tracker_channels must be NULL");
+    assert!(plugin.tracker_position.is_none(), "scope-only: tracker_position must be NULL");
+    assert!(plugin.tracker_channel_rows.is_none(), "scope-only: tracker_channel_rows must be NULL");
+    assert!(plugin.tracker_cells.is_none(), "scope-only: tracker_cells must be NULL");
 
     // --- scope channels: each named, every voice declares stereo width 2 ---
     let mut chans = vec![ChannelDesc { name: [0; 24], scope_width: 0 }; scope_channels];
-    let nc = (plugin.get_scope_channels.unwrap())(user_data, chans.as_mut_ptr(), chans.len() as u32);
+    let nc = (plugin.scope_channels.unwrap())(user_data, chans.as_mut_ptr(), chans.len() as u32);
     assert_eq!(nc as usize, scope_channels, "scope channel count must match structure");
     assert_ne!(chans[0].name[0], 0, "scope channel name should be populated");
     assert!(chans.iter().all(|c| c.scope_width == 2), "every scope channel must report stereo width 2");
@@ -109,18 +109,18 @@ fn pxtone_viz_vtable() {
     // --- no hidden auto-on: with capture never enabled, scope reads return nothing ---
     render(plugin, user_data, 4);
     let mut scope = vec![0f32; 2048];
-    let ns_off = (plugin.get_scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
-    assert_eq!(ns_off, 0, "scope must stay silent until set_scope_enabled(true)");
+    let ns_off = (plugin.scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
+    assert_eq!(ns_off, 0, "scope must stay silent until scope_enable(true)");
 
     // --- enable: interleaved stereo samples appear, count is even (L/R pairs) ---
-    (plugin.set_scope_enabled.unwrap())(user_data, true);
+    (plugin.scope_enable.unwrap())(user_data, true);
     render(plugin, user_data, 20);
 
     let mut found_stereo_separation = false;
     let mut max_peak = 0f32;
     for ch in 0..scope_channels {
         let mut buf = vec![0f32; 2048];
-        let n = (plugin.get_scope_samples.unwrap())(user_data, ch as i32, buf.as_mut_ptr(), buf.len() as u32) as usize;
+        let n = (plugin.scope_samples.unwrap())(user_data, ch as i32, buf.as_mut_ptr(), buf.len() as u32) as usize;
         assert_eq!(n % 2, 0, "stereo scope must return an even (interleaved) sample count");
         let mut i = 0;
         while i + 1 < n {
@@ -137,20 +137,20 @@ fn pxtone_viz_vtable() {
 
     // --- VU: per-channel levels present while enabled ---
     let mut vu = vec![0f32; scope_channels];
-    let nv = (plugin.get_vu.unwrap())(user_data, vu.as_mut_ptr(), vu.len() as u32);
+    let nv = (plugin.vu_levels.unwrap())(user_data, vu.as_mut_ptr(), vu.len() as u32);
     assert_eq!(nv as usize, scope_channels, "VU must report one level per scope channel");
     assert!(vu.iter().any(|&v| v > 1e-4), "VU is silent on an audible file");
 
     // --- disable stops capture; re-enable resumes ---
-    (plugin.set_scope_enabled.unwrap())(user_data, false);
+    (plugin.scope_enable.unwrap())(user_data, false);
     render(plugin, user_data, 5);
-    let ns_disabled = (plugin.get_scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
-    assert_eq!(ns_disabled, 0, "set_scope_enabled(false) must stop capture");
+    let ns_disabled = (plugin.scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
+    assert_eq!(ns_disabled, 0, "scope_enable(false) must stop capture");
 
-    (plugin.set_scope_enabled.unwrap())(user_data, true);
+    (plugin.scope_enable.unwrap())(user_data, true);
     render(plugin, user_data, 20);
-    let ns_resumed = (plugin.get_scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
-    assert!(ns_resumed > 0, "set_scope_enabled(true) must resume capture");
+    let ns_resumed = (plugin.scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
+    assert!(ns_resumed > 0, "scope_enable(true) must resume capture");
 
     (plugin.destroy.unwrap())(user_data);
 }

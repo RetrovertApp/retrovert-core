@@ -1,7 +1,7 @@
 // dlopen the real organya plugin and drive the value-semantic viz vtable end to end,
 // proving the scope-only model: advertises Scope but no PatternCells, leaves every
 // pattern getter NULL, reports its 16 voices (8 melody + 8 percussion), and returns
-// non-silent scope only after an explicit set_scope_enabled (no hidden auto-on).
+// non-silent scope only after an explicit scope_enable (no hidden auto-on).
 // The static vtable wiring is asserted before the module gate, so it is verified even
 // when the test module is absent. Skips (does not fail) if the .so or module is missing.
 
@@ -9,7 +9,7 @@ use cfixed_string::CFixedString;
 use libloading::{Library, Symbol};
 use plugin_types::{
     AudioFormat, AudioStreamFormat, ChannelDesc, PlaybackPlugin, ReadData, ReadInfo, ReadStatus,
-    RVService, ScrollMode, VizCaps, VizStructure,
+    RVService, ScrollMode, VizCaps, VizInfo,
 };
 use services::PluginService;
 use std::path::PathBuf;
@@ -68,16 +68,16 @@ fn organya_viz_vtable() {
     assert_eq!(plugin.api_version, plugin_types::RV_PLAYBACK_PLUGIN_API_VERSION);
 
     // --- static vtable wiring (no module needed) ---
-    assert!(plugin.get_structure.is_some(), "organya must implement get_structure");
-    assert!(plugin.get_scope_channels.is_some(), "organya must implement get_scope_channels");
-    assert!(plugin.set_scope_enabled.is_some(), "organya must implement set_scope_enabled");
-    assert!(plugin.get_scope_samples.is_some(), "organya must implement get_scope_samples");
-    assert!(plugin.get_columns.is_none(), "scope-only: get_columns must be NULL");
-    assert!(plugin.get_pattern_channels.is_none(), "scope-only: get_pattern_channels must be NULL");
-    assert!(plugin.get_position.is_none(), "scope-only: get_position must be NULL");
-    assert!(plugin.get_channel_rows.is_none(), "scope-only: get_channel_rows must be NULL");
-    assert!(plugin.get_cells.is_none(), "scope-only: get_cells must be NULL");
-    assert!(plugin.get_vu.is_none(), "scope-only: get_vu must be NULL");
+    assert!(plugin.viz_info.is_some(), "organya must implement viz_info");
+    assert!(plugin.scope_channels.is_some(), "organya must implement scope_channels");
+    assert!(plugin.scope_enable.is_some(), "organya must implement scope_enable");
+    assert!(plugin.scope_samples.is_some(), "organya must implement scope_samples");
+    assert!(plugin.tracker_columns.is_none(), "scope-only: tracker_columns must be NULL");
+    assert!(plugin.tracker_channels.is_none(), "scope-only: tracker_channels must be NULL");
+    assert!(plugin.tracker_position.is_none(), "scope-only: tracker_position must be NULL");
+    assert!(plugin.tracker_channel_rows.is_none(), "scope-only: tracker_channel_rows must be NULL");
+    assert!(plugin.tracker_cells.is_none(), "scope-only: tracker_cells must be NULL");
+    assert!(plugin.vu_levels.is_none(), "scope-only: vu_levels must be NULL");
 
     let module = match std::fs::canonicalize(module_path()) {
         Ok(p) => p,
@@ -103,8 +103,8 @@ fn organya_viz_vtable() {
     assert!(render(plugin, user_data, 4) > 0, "decoder produced no frames");
 
     // --- structure: scope-only — Scope, no PatternCells, 16 voices ---
-    let mut st = VizStructure { caps: 0, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 0, scope_channel_count: 0, column_count: 0 };
-    assert!((plugin.get_structure.unwrap())(user_data, &mut st));
+    let mut st = VizInfo { caps: 0, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 0, scope_channel_count: 0, column_count: 0 };
+    assert!((plugin.viz_info.unwrap())(user_data, &mut st));
     assert!(st.caps & VizCaps::SCOPE.bits() != 0, "organya must advertise Scope");
     assert!(st.caps & VizCaps::PATTERN_CELLS.bits() == 0, "scope-only: must NOT advertise PatternCells");
     assert_eq!(st.pattern_channel_count, 0, "scope-only: no pattern channels");
@@ -113,7 +113,7 @@ fn organya_viz_vtable() {
 
     // --- scope channels: 16, each named, mono ---
     let mut chans = vec![ChannelDesc { name: [0; 24], scope_width: 0 }; 16];
-    let nc = (plugin.get_scope_channels.unwrap())(user_data, chans.as_mut_ptr(), chans.len() as u32);
+    let nc = (plugin.scope_channels.unwrap())(user_data, chans.as_mut_ptr(), chans.len() as u32);
     assert_eq!(nc, 16, "scope channel count must match structure");
     assert_ne!(chans[0].name[0], 0, "scope channel name should be populated");
     assert_eq!(chans[0].scope_width, 0, "scope-only: mono scope width");
@@ -121,15 +121,15 @@ fn organya_viz_vtable() {
     // --- no hidden auto-on: scope yields nothing until explicitly enabled ---
     render(plugin, user_data, 4);
     let mut scope = vec![0f32; 1024];
-    let off = (plugin.get_scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
-    assert_eq!(off, 0, "scope must be silent before set_scope_enabled(true)");
+    let off = (plugin.scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
+    assert_eq!(off, 0, "scope must be silent before scope_enable(true)");
 
     // --- scope: non-silent samples after explicit enable ---
-    (plugin.set_scope_enabled.unwrap())(user_data, true);
+    (plugin.scope_enable.unwrap())(user_data, true);
     render(plugin, user_data, 20);
     let mut found_peak = 0f32;
     for ch in 0..16i32 {
-        let ns = (plugin.get_scope_samples.unwrap())(user_data, ch, scope.as_mut_ptr(), scope.len() as u32);
+        let ns = (plugin.scope_samples.unwrap())(user_data, ch, scope.as_mut_ptr(), scope.len() as u32);
         if ns > 0 {
             let p = scope[..ns as usize].iter().fold(0f32, |a, &x| a.max(x.abs()));
             found_peak = found_peak.max(p);

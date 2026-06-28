@@ -2,11 +2,15 @@
 
 pub const RV_PLAYBACK_PLUGIN_API_VERSION: u64 = 2;
 
+/// Result of probing a candidate file to decide whether this plugin can play it.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ProbeResult {
+    /// The plugin recognizes the data and can play it.
     Supported = 0,
+    /// The plugin is certain it cannot play the data.
     Unsupported = 1,
+    /// The plugin cannot tell from the data alone (host may try opening it).
     Unsure = 2,
 }
 
@@ -15,12 +19,17 @@ const _: () = {
     assert!(core::mem::align_of::<ProbeResult>() == 4, "ProbeResult align drift");
 };
 
+/// Status of a single `read_data` call.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ReadStatus {
+    /// No audio produced yet; the plugin is still preparing (host should retry).
     DecodingRequest = 0,
+    /// Audio frames were produced successfully.
     Ok = 1,
+    /// The song reached its end; no more audio will follow.
     Finished = 2,
+    /// A decoding error occurred; playback should stop.
     Error = 3,
 }
 
@@ -29,10 +38,13 @@ const _: () = {
     assert!(core::mem::align_of::<ReadStatus>() == 4, "ReadStatus align drift");
 };
 
+/// Whether a settings change can be applied live or needs a restart of the song.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum SettingsUpdate {
+    /// New settings took effect immediately.
     Default = 0,
+    /// The song must be reopened for the new settings to apply.
     RequireRestart = 1,
 }
 
@@ -42,14 +54,22 @@ const _: () = {
 };
 
 bitflags::bitflags! {
+    /// What a plugin can show on the visualization surface. A plugin advertises these
+    /// in `VizInfo.caps`; the host enables only the features the plugin reports.
     #[repr(transparent)]
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
     pub struct VizCaps: u32 {
+        /// Provides tracker pattern cells (`tracker_cells` and the column/channel queries).
         const PATTERN_CELLS = 1;
+        /// Provides per-channel oscilloscope waveforms (`scope_samples`).
         const SCOPE = 2;
+        /// Provides per-channel VU levels (`vu_levels`).
         const VU = 4;
+        /// The whole song is available as a window from the moment it opens.
         const WHOLE_SONG_KNOWN = 8;
+        /// Cells ahead of the current position can be previewed before they play.
         const SEEKABLE_PREVIEW = 16;
+        /// Future rows are known and stable (not synthesized as playback advances).
         const FUTURE_KNOWN = 32;
     }
 }
@@ -58,10 +78,13 @@ const _: () = {
     assert!(core::mem::size_of::<VizCaps>() == 4, "VizCaps size drift");
 };
 
+/// How pattern channels advance through rows.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ScrollMode {
+    /// All channels share one row position (e.g. MOD/XM).
     Synchronized = 0,
+    /// Each channel scrolls at its own row position (e.g. TFMX).
     PerChannel = 1,
 }
 
@@ -70,14 +93,21 @@ const _: () = {
     assert!(core::mem::align_of::<ScrollMode>() == 4, "ScrollMode align drift");
 };
 
+/// What a tracker pattern column holds, used by the host for coloring and layout.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ColumnKind {
+    /// Note column (pitch / note-off).
     Note = 0,
+    /// Instrument or sample number.
     Instrument = 1,
+    /// Volume column.
     Volume = 2,
+    /// Effect command.
     Effect = 3,
+    /// Effect parameter.
     Param = 4,
+    /// Plugin-specific column with no standard meaning.
     Custom = 5,
 }
 
@@ -88,11 +118,15 @@ const _: () = {
 
 pub enum RVService {}
 
+/// Format and outcome of a block of decoded audio.
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct ReadInfo {
+    /// Sample format, channel count, and sample rate of the produced frames.
     pub format: crate::AudioFormat,
+    /// Number of audio frames produced.
     pub frame_count: u32,
+    /// Outcome of the read.
     pub status: crate::ReadStatus,
 }
 
@@ -104,11 +138,15 @@ const _: () = {
     assert!(core::mem::offset_of!(ReadInfo, status) == 16, "ReadInfo.status offset drift");
 };
 
+/// Destination buffer and resulting info for a `read_data` call.
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct ReadData {
+    /// Caller-owned output buffer the plugin writes interleaved frames into.
     pub channels_output: *mut core::ffi::c_void,
+    /// Capacity of `channels_output` in bytes.
     pub channels_output_max_bytes_size: u32,
+    /// Filled in by the plugin to describe what it produced.
     pub info: crate::ReadInfo,
 }
 
@@ -120,31 +158,43 @@ const _: () = {
     assert!(core::mem::offset_of!(ReadData, info) == 12, "ReadData.info offset drift");
 };
 
+/// One-time description of a plugin's visualization surface, queried with `viz_info`
+/// after the song opens. Counts here size the buffers the host passes to the
+/// column, channel, and cell queries.
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
-pub struct VizStructure {
+pub struct VizInfo {
+    /// Bitset of `VizCaps` the plugin supports.
     pub caps: u32,
+    /// How pattern channels scroll.
     pub scroll_mode: crate::ScrollMode,
+    /// Number of channels in the pattern grid.
     pub pattern_channel_count: u32,
+    /// Number of channels with an oscilloscope.
     pub scope_channel_count: u32,
+    /// Number of columns per pattern channel.
     pub column_count: u32,
 }
 
 const _: () = {
-    assert!(core::mem::size_of::<VizStructure>() == 20, "VizStructure size drift");
-    assert!(core::mem::align_of::<VizStructure>() == 4, "VizStructure align drift");
-    assert!(core::mem::offset_of!(VizStructure, caps) == 0, "VizStructure.caps offset drift");
-    assert!(core::mem::offset_of!(VizStructure, scroll_mode) == 4, "VizStructure.scroll_mode offset drift");
-    assert!(core::mem::offset_of!(VizStructure, pattern_channel_count) == 8, "VizStructure.pattern_channel_count offset drift");
-    assert!(core::mem::offset_of!(VizStructure, scope_channel_count) == 12, "VizStructure.scope_channel_count offset drift");
-    assert!(core::mem::offset_of!(VizStructure, column_count) == 16, "VizStructure.column_count offset drift");
+    assert!(core::mem::size_of::<VizInfo>() == 20, "VizInfo size drift");
+    assert!(core::mem::align_of::<VizInfo>() == 4, "VizInfo align drift");
+    assert!(core::mem::offset_of!(VizInfo, caps) == 0, "VizInfo.caps offset drift");
+    assert!(core::mem::offset_of!(VizInfo, scroll_mode) == 4, "VizInfo.scroll_mode offset drift");
+    assert!(core::mem::offset_of!(VizInfo, pattern_channel_count) == 8, "VizInfo.pattern_channel_count offset drift");
+    assert!(core::mem::offset_of!(VizInfo, scope_channel_count) == 12, "VizInfo.scope_channel_count offset drift");
+    assert!(core::mem::offset_of!(VizInfo, column_count) == 16, "VizInfo.column_count offset drift");
 };
 
+/// Description of one tracker pattern column, queried once with `tracker_columns`.
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct ColumnDesc {
+    /// Short display label (UTF-8, NUL-padded).
     pub label: [u8; 16],
+    /// Rendered text width of this column in characters (at most 16).
     pub char_width: u8,
+    /// What the column holds.
     pub kind: crate::ColumnKind,
 }
 
@@ -156,10 +206,13 @@ const _: () = {
     assert!(core::mem::offset_of!(ColumnDesc, kind) == 20, "ColumnDesc.kind offset drift");
 };
 
+/// Description of one channel, queried once with `tracker_channels` or `scope_channels`.
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct ChannelDesc {
+    /// Short channel name (UTF-8, NUL-padded).
     pub name: [u8; 24],
+    /// Oscilloscope width: 1 for mono, 2 for interleaved stereo.
     pub scope_width: u8,
 }
 
@@ -170,69 +223,111 @@ const _: () = {
     assert!(core::mem::offset_of!(ChannelDesc, scope_width) == 24, "ChannelDesc.scope_width offset drift");
 };
 
+/// Live musical position of the playhead, queried per frame with `tracker_position`.
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
-pub struct VizPosition {
+pub struct TrackerPosition {
+    /// Index into the order list.
     pub order: u32,
+    /// Pattern currently playing.
     pub pattern: u32,
+    /// Current row within the pattern.
     pub row: u32,
+    /// Lowest row index currently valid for `tracker_cells`.
     pub window_lo: u32,
+    /// One past the highest valid row index for `tracker_cells`.
     pub window_hi: u32,
 }
 
 const _: () = {
-    assert!(core::mem::size_of::<VizPosition>() == 20, "VizPosition size drift");
-    assert!(core::mem::align_of::<VizPosition>() == 4, "VizPosition align drift");
-    assert!(core::mem::offset_of!(VizPosition, order) == 0, "VizPosition.order offset drift");
-    assert!(core::mem::offset_of!(VizPosition, pattern) == 4, "VizPosition.pattern offset drift");
-    assert!(core::mem::offset_of!(VizPosition, row) == 8, "VizPosition.row offset drift");
-    assert!(core::mem::offset_of!(VizPosition, window_lo) == 12, "VizPosition.window_lo offset drift");
-    assert!(core::mem::offset_of!(VizPosition, window_hi) == 16, "VizPosition.window_hi offset drift");
+    assert!(core::mem::size_of::<TrackerPosition>() == 20, "TrackerPosition size drift");
+    assert!(core::mem::align_of::<TrackerPosition>() == 4, "TrackerPosition align drift");
+    assert!(core::mem::offset_of!(TrackerPosition, order) == 0, "TrackerPosition.order offset drift");
+    assert!(core::mem::offset_of!(TrackerPosition, pattern) == 4, "TrackerPosition.pattern offset drift");
+    assert!(core::mem::offset_of!(TrackerPosition, row) == 8, "TrackerPosition.row offset drift");
+    assert!(core::mem::offset_of!(TrackerPosition, window_lo) == 12, "TrackerPosition.window_lo offset drift");
+    assert!(core::mem::offset_of!(TrackerPosition, window_hi) == 16, "TrackerPosition.window_hi offset drift");
 };
 
+/// One tracker pattern cell: the plugin's raw value plus its own rendered text.
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
-pub struct Cell {
+pub struct PatternCell {
+    /// Format-specific raw value; the host uses it for coloring.
     pub raw: u32,
+    /// Fixed-width rendered text the host lays out directly (UTF-8, NUL-padded).
     pub text: [u8; 16],
 }
 
 const _: () = {
-    assert!(core::mem::size_of::<Cell>() == 20, "Cell size drift");
-    assert!(core::mem::align_of::<Cell>() == 4, "Cell align drift");
-    assert!(core::mem::offset_of!(Cell, raw) == 0, "Cell.raw offset drift");
-    assert!(core::mem::offset_of!(Cell, text) == 4, "Cell.text offset drift");
+    assert!(core::mem::size_of::<PatternCell>() == 20, "PatternCell size drift");
+    assert!(core::mem::align_of::<PatternCell>() == 4, "PatternCell align drift");
+    assert!(core::mem::offset_of!(PatternCell, raw) == 0, "PatternCell.raw offset drift");
+    assert!(core::mem::offset_of!(PatternCell, text) == 4, "PatternCell.text offset drift");
 };
 
+/// The interface a host loads to play one or more retro music formats and, optionally,
+/// visualize what is playing. The host fills `user_data` from `create` and passes it
+/// back to every per-instance call.
 #[repr(C)]
 pub struct PlaybackPlugin {
+    /// ABI version the plugin was built against; must equal RV_PLAYBACK_PLUGIN_API_VERSION.
     pub api_version: u64,
+    /// Human-readable plugin name.
     pub name: *const core::ffi::c_char,
+    /// Plugin version string.
     pub version: *const core::ffi::c_char,
+    /// Version of the underlying decoder library, if any.
     pub library_version: *const core::ffi::c_char,
+    /// Inspect file data (and optionally its name) to report whether this plugin can play it.
     pub probe_can_play: Option<extern "C" fn(data: *mut u8, data_size: u64, filename: *const core::ffi::c_char, total_size: u64) -> crate::ProbeResult>,
+    /// Comma-separated list of file extensions this plugin handles.
     pub supported_extensions: Option<extern "C" fn() -> *const core::ffi::c_char>,
+    /// Create a plugin instance, returning its `user_data` handle.
     pub create: Option<extern "C" fn(services: *const RVService) -> *mut core::ffi::c_void>,
+    /// Destroy an instance created by `create`.
     pub destroy: Option<extern "C" fn(user_data: *mut core::ffi::c_void) -> i32>,
+    /// Deliver a host event to the instance.
     pub event: Option<extern "C" fn(user_data: *mut core::ffi::c_void, data: *mut u8, data_size: u64)>,
+    /// Open a song (optionally a specific subsong) for playback.
     pub open: Option<extern "C" fn(user_data: *mut core::ffi::c_void, url: *const core::ffi::c_char, subsong: u32, services: *const RVService) -> i32>,
+    /// Close the song opened with `open`, leaving the instance reusable.
     pub close: Option<extern "C" fn(user_data: *mut core::ffi::c_void)>,
+    /// Decode the next block of audio into the caller's buffer.
     pub read_data: Option<extern "C" fn(user_data: *mut core::ffi::c_void, dest: crate::ReadData) -> crate::ReadInfo>,
+    /// Seek to a position in milliseconds; returns the position actually reached.
     pub seek: Option<extern "C" fn(user_data: *mut core::ffi::c_void, ms: i64) -> i64>,
+    /// Read metadata for a song without opening it for playback.
     pub metadata: Option<extern "C" fn(url: *const core::ffi::c_char, services: *const RVService) -> i32>,
+    /// One-time process-wide setup, called once before any instance is created.
     pub static_init: Option<extern "C" fn(services: *const RVService)>,
+    /// React to a settings change for an instance.
     pub settings_updated: Option<extern "C" fn(user_data: *mut core::ffi::c_void, services: *const RVService) -> crate::SettingsUpdate>,
+    /// One-time process-wide teardown, called once after all instances are destroyed.
     pub static_destroy: Option<extern "C" fn()>,
-    pub get_structure: Option<extern "C" fn(user_data: *mut core::ffi::c_void, out: *mut crate::VizStructure) -> bool>,
-    pub get_columns: Option<extern "C" fn(user_data: *mut core::ffi::c_void, out: *mut crate::ColumnDesc, cap: u32) -> u32>,
-    pub get_pattern_channels: Option<extern "C" fn(user_data: *mut core::ffi::c_void, out: *mut crate::ChannelDesc, cap: u32) -> u32>,
-    pub get_scope_channels: Option<extern "C" fn(user_data: *mut core::ffi::c_void, out: *mut crate::ChannelDesc, cap: u32) -> u32>,
-    pub get_position: Option<extern "C" fn(user_data: *mut core::ffi::c_void, out: *mut crate::VizPosition) -> bool>,
-    pub get_channel_rows: Option<extern "C" fn(user_data: *mut core::ffi::c_void, out: *mut u32, cap: u32) -> u32>,
-    pub get_cells: Option<extern "C" fn(user_data: *mut core::ffi::c_void, channel: i32, row_lo: u32, row_hi: u32, out: *mut crate::Cell, cap: u32) -> u32>,
-    pub set_scope_enabled: Option<extern "C" fn(user_data: *mut core::ffi::c_void, on: bool)>,
-    pub get_scope_samples: Option<extern "C" fn(user_data: *mut core::ffi::c_void, channel: i32, out: *mut f32, cap: u32) -> u32>,
-    pub get_vu: Option<extern "C" fn(user_data: *mut core::ffi::c_void, out: *mut f32, cap: u32) -> u32>,
+    /// Describe the visualization surface once after `open`; returns false if the
+    /// instance has nothing to visualize. A null pointer means no visualization at all.
+    pub viz_info: Option<extern "C" fn(user_data: *mut core::ffi::c_void, out: *mut crate::VizInfo) -> bool>,
+    /// Fill up to `cap` column descriptions; returns the number written.
+    pub tracker_columns: Option<extern "C" fn(user_data: *mut core::ffi::c_void, out: *mut crate::ColumnDesc, cap: u32) -> u32>,
+    /// Fill up to `cap` pattern-channel descriptions; returns the number written.
+    pub tracker_channels: Option<extern "C" fn(user_data: *mut core::ffi::c_void, out: *mut crate::ChannelDesc, cap: u32) -> u32>,
+    /// Fill up to `cap` scope-channel descriptions; returns the number written.
+    pub scope_channels: Option<extern "C" fn(user_data: *mut core::ffi::c_void, out: *mut crate::ChannelDesc, cap: u32) -> u32>,
+    /// Report the live playhead position; returns false if unavailable this frame.
+    pub tracker_position: Option<extern "C" fn(user_data: *mut core::ffi::c_void, out: *mut crate::TrackerPosition) -> bool>,
+    /// Fill up to `cap` per-channel row counts (for per-channel scrolling); returns the number written.
+    pub tracker_channel_rows: Option<extern "C" fn(user_data: *mut core::ffi::c_void, out: *mut u32, cap: u32) -> u32>,
+    /// Fill cells for `channel` over rows [row_lo, row_hi) into `out` (one PatternCell
+    /// per column per row); returns the number of cells written.
+    pub tracker_cells: Option<extern "C" fn(user_data: *mut core::ffi::c_void, channel: i32, row_lo: u32, row_hi: u32, out: *mut crate::PatternCell, cap: u32) -> u32>,
+    /// Turn oscilloscope capture on or off; off by default to avoid its cost.
+    pub scope_enable: Option<extern "C" fn(user_data: *mut core::ffi::c_void, on: bool)>,
+    /// Copy up to `cap` most-recent scope samples for `channel` as float [-1, 1] at
+    /// playback rate; returns the number written.
+    pub scope_samples: Option<extern "C" fn(user_data: *mut core::ffi::c_void, channel: i32, out: *mut f32, cap: u32) -> u32>,
+    /// Fill up to `cap` per-channel VU levels; returns the number written.
+    pub vu_levels: Option<extern "C" fn(user_data: *mut core::ffi::c_void, out: *mut f32, cap: u32) -> u32>,
 }
 
 const _: () = {
@@ -255,15 +350,15 @@ const _: () = {
     assert!(core::mem::offset_of!(PlaybackPlugin, static_init) == 112, "PlaybackPlugin.static_init offset drift");
     assert!(core::mem::offset_of!(PlaybackPlugin, settings_updated) == 120, "PlaybackPlugin.settings_updated offset drift");
     assert!(core::mem::offset_of!(PlaybackPlugin, static_destroy) == 128, "PlaybackPlugin.static_destroy offset drift");
-    assert!(core::mem::offset_of!(PlaybackPlugin, get_structure) == 136, "PlaybackPlugin.get_structure offset drift");
-    assert!(core::mem::offset_of!(PlaybackPlugin, get_columns) == 144, "PlaybackPlugin.get_columns offset drift");
-    assert!(core::mem::offset_of!(PlaybackPlugin, get_pattern_channels) == 152, "PlaybackPlugin.get_pattern_channels offset drift");
-    assert!(core::mem::offset_of!(PlaybackPlugin, get_scope_channels) == 160, "PlaybackPlugin.get_scope_channels offset drift");
-    assert!(core::mem::offset_of!(PlaybackPlugin, get_position) == 168, "PlaybackPlugin.get_position offset drift");
-    assert!(core::mem::offset_of!(PlaybackPlugin, get_channel_rows) == 176, "PlaybackPlugin.get_channel_rows offset drift");
-    assert!(core::mem::offset_of!(PlaybackPlugin, get_cells) == 184, "PlaybackPlugin.get_cells offset drift");
-    assert!(core::mem::offset_of!(PlaybackPlugin, set_scope_enabled) == 192, "PlaybackPlugin.set_scope_enabled offset drift");
-    assert!(core::mem::offset_of!(PlaybackPlugin, get_scope_samples) == 200, "PlaybackPlugin.get_scope_samples offset drift");
-    assert!(core::mem::offset_of!(PlaybackPlugin, get_vu) == 208, "PlaybackPlugin.get_vu offset drift");
+    assert!(core::mem::offset_of!(PlaybackPlugin, viz_info) == 136, "PlaybackPlugin.viz_info offset drift");
+    assert!(core::mem::offset_of!(PlaybackPlugin, tracker_columns) == 144, "PlaybackPlugin.tracker_columns offset drift");
+    assert!(core::mem::offset_of!(PlaybackPlugin, tracker_channels) == 152, "PlaybackPlugin.tracker_channels offset drift");
+    assert!(core::mem::offset_of!(PlaybackPlugin, scope_channels) == 160, "PlaybackPlugin.scope_channels offset drift");
+    assert!(core::mem::offset_of!(PlaybackPlugin, tracker_position) == 168, "PlaybackPlugin.tracker_position offset drift");
+    assert!(core::mem::offset_of!(PlaybackPlugin, tracker_channel_rows) == 176, "PlaybackPlugin.tracker_channel_rows offset drift");
+    assert!(core::mem::offset_of!(PlaybackPlugin, tracker_cells) == 184, "PlaybackPlugin.tracker_cells offset drift");
+    assert!(core::mem::offset_of!(PlaybackPlugin, scope_enable) == 192, "PlaybackPlugin.scope_enable offset drift");
+    assert!(core::mem::offset_of!(PlaybackPlugin, scope_samples) == 200, "PlaybackPlugin.scope_samples offset drift");
+    assert!(core::mem::offset_of!(PlaybackPlugin, vu_levels) == 208, "PlaybackPlugin.vu_levels offset drift");
 };
 

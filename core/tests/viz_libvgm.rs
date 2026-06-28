@@ -1,15 +1,15 @@
 // dlopen the real libvgm plugin and drive the value-semantic viz vtable end to end.
 // libvgm parses the whole VGM register stream at open, so it proves the
 // per-channel-scrolling + WholeSongKnown model: a window spanning every row served
-// through the standard windowed get_cells (no private native_pattern_data pointer).
+// through the standard windowed tracker_cells (no private native_pattern_data pointer).
 // Skips (does not fail) if the plugin .so or the test module is missing, and adapts
 // to a .so built without HAS_VGM_PATTERN (scope-only) so both build configs pass.
 
 use cfixed_string::CFixedString;
 use libloading::{Library, Symbol};
 use plugin_types::{
-    AudioFormat, AudioStreamFormat, Cell, ChannelDesc, ColumnDesc, ColumnKind, PlaybackPlugin,
-    ReadData, ReadInfo, ReadStatus, RVService, ScrollMode, VizCaps, VizPosition, VizStructure,
+    AudioFormat, AudioStreamFormat, PatternCell, ChannelDesc, ColumnDesc, ColumnKind, PlaybackPlugin,
+    ReadData, ReadInfo, ReadStatus, RVService, ScrollMode, VizCaps, TrackerPosition, VizInfo,
 };
 use services::PluginService;
 use std::path::PathBuf;
@@ -88,12 +88,12 @@ fn libvgm_viz_vtable() {
     assert_eq!(rc, 0, "open failed for {}", module.display());
 
     // Establish playback position and let scope capture warm up.
-    (plugin.set_scope_enabled.unwrap())(user_data, true);
+    (plugin.scope_enable.unwrap())(user_data, true);
     render(plugin, user_data, 8);
 
     // --- structure ---
-    let mut st = VizStructure { caps: 0, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 0, scope_channel_count: 0, column_count: 0 };
-    assert!((plugin.get_structure.unwrap())(user_data, &mut st));
+    let mut st = VizInfo { caps: 0, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 0, scope_channel_count: 0, column_count: 0 };
+    assert!((plugin.viz_info.unwrap())(user_data, &mut st));
     assert!(st.caps & VizCaps::SCOPE.bits() != 0, "libvgm should advertise scope");
     assert!(st.scope_channel_count > 0, "expected scope voices");
 
@@ -108,7 +108,7 @@ fn libvgm_viz_vtable() {
 
         // --- columns ---
         let mut cols = [ColumnDesc { label: [0; 16], char_width: 0, kind: ColumnKind::Custom }; 8];
-        let n = (plugin.get_columns.unwrap())(user_data, cols.as_mut_ptr(), cols.len() as u32);
+        let n = (plugin.tracker_columns.unwrap())(user_data, cols.as_mut_ptr(), cols.len() as u32);
         assert_eq!(n, 4);
         assert_eq!(cols[0].kind, ColumnKind::Note);
         assert_eq!(cols[1].kind, ColumnKind::Volume);
@@ -117,41 +117,41 @@ fn libvgm_viz_vtable() {
 
         // --- pattern channels ---
         let mut chans = [ChannelDesc { name: [0; 24], scope_width: 0 }; 64];
-        let nc = (plugin.get_pattern_channels.unwrap())(user_data, chans.as_mut_ptr(), chans.len() as u32);
+        let nc = (plugin.tracker_channels.unwrap())(user_data, chans.as_mut_ptr(), chans.len() as u32);
         assert_eq!(nc as usize, channels);
         assert_ne!(chans[0].name[0], 0, "channel name should be populated");
 
         // --- position: window spans the longest channel ---
-        let mut pos = VizPosition { order: 0, pattern: 0, row: 0, window_lo: 0, window_hi: 0 };
-        assert!((plugin.get_position.unwrap())(user_data, &mut pos));
+        let mut pos = TrackerPosition { order: 0, pattern: 0, row: 0, window_lo: 0, window_hi: 0 };
+        assert!((plugin.tracker_position.unwrap())(user_data, &mut pos));
         assert!(pos.window_hi > 0, "window should span the pattern rows");
         let rows = pos.window_hi as usize;
 
         // --- per-channel scrolling: one independent row per channel, all inside the window ---
         let mut chrows = vec![0u32; channels];
-        let got_rows = (plugin.get_channel_rows.unwrap())(user_data, chrows.as_mut_ptr(), channels as u32);
+        let got_rows = (plugin.tracker_channel_rows.unwrap())(user_data, chrows.as_mut_ptr(), channels as u32);
         assert_eq!(got_rows as usize, channels, "per-channel mode reports one row per channel");
         for (i, &r) in chrows.iter().enumerate() {
             assert!(r <= pos.window_hi, "channel {i} row {r} outside window {}", pos.window_hi);
         }
         // Playheads track playback: after rendering further at least one channel's row advances —
-        // proves get_channel_rows is wired to the live position, not a zero stub.
+        // proves tracker_channel_rows is wired to the live position, not a zero stub.
         render(plugin, user_data, 40);
         let mut chrows2 = vec![0u32; channels];
-        (plugin.get_channel_rows.unwrap())(user_data, chrows2.as_mut_ptr(), channels as u32);
+        (plugin.tracker_channel_rows.unwrap())(user_data, chrows2.as_mut_ptr(), channels as u32);
         assert!(
             chrows2.iter().zip(&chrows).any(|(&b, &a)| b > a),
             "per-channel playheads did not advance: {chrows:?} -> {chrows2:?}"
         );
 
         // --- cells, all channels: row -> channel -> column (rectangular grid) ---
-        let mut cells = vec![Cell { raw: 0, text: [0; 16] }; rows * channels * 4];
-        let got = (plugin.get_cells.unwrap())(user_data, -1, 0, pos.window_hi, cells.as_mut_ptr(), cells.len() as u32);
+        let mut cells = vec![PatternCell { raw: 0, text: [0; 16] }; rows * channels * 4];
+        let got = (plugin.tracker_cells.unwrap())(user_data, -1, 0, pos.window_hi, cells.as_mut_ptr(), cells.len() as u32);
         assert_eq!(got as usize, rows * channels * 4);
 
         // single channel returns rows * columns
-        let mut one = vec![Cell { raw: 0, text: [0; 16] }; rows * 4];
-        let got1 = (plugin.get_cells.unwrap())(user_data, 0, 0, pos.window_hi, one.as_mut_ptr(), one.len() as u32);
+        let mut one = vec![PatternCell { raw: 0, text: [0; 16] }; rows * 4];
+        let got1 = (plugin.tracker_cells.unwrap())(user_data, 0, 0, pos.window_hi, one.as_mut_ptr(), one.len() as u32);
         assert_eq!(got1 as usize, rows * 4);
 
         // Content: at least one rendered note name, and the effect encoding is standardized —
@@ -177,8 +177,8 @@ fn libvgm_viz_vtable() {
         eprintln!("note: libvgm .so built without HAS_VGM_PATTERN — verifying scope-only path");
         assert_eq!(st.pattern_channel_count, 0);
         assert_eq!(st.column_count, 0);
-        let mut cells = [Cell { raw: 0, text: [0; 16] }; 16];
-        assert_eq!((plugin.get_cells.unwrap())(user_data, -1, 0, 64, cells.as_mut_ptr(), cells.len() as u32), 0);
+        let mut cells = [PatternCell { raw: 0, text: [0; 16] }; 16];
+        assert_eq!((plugin.tracker_cells.unwrap())(user_data, -1, 0, 64, cells.as_mut_ptr(), cells.len() as u32), 0);
     }
 
     // --- scope: non-silent on at least one voice (real chip emulation) ---
@@ -186,7 +186,7 @@ fn libvgm_viz_vtable() {
     let mut scope = vec![0f32; 1024];
     let mut peak = 0f32;
     for ch in 0..st.scope_channel_count as i32 {
-        let ns = (plugin.get_scope_samples.unwrap())(user_data, ch, scope.as_mut_ptr(), scope.len() as u32);
+        let ns = (plugin.scope_samples.unwrap())(user_data, ch, scope.as_mut_ptr(), scope.len() as u32);
         peak = scope[..ns as usize].iter().fold(peak, |a, &x| a.max(x.abs()));
     }
     assert!(peak > 1e-4, "scope is silent across all voices (peak {peak})");

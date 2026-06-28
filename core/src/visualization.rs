@@ -1,6 +1,6 @@
 use plugin_types::{
-    Cell, ChannelDesc, ColumnDesc, ColumnKind, PlaybackPlugin, ScrollMode, VizCaps, VizPosition,
-    VizStructure,
+    PatternCell, ChannelDesc, ColumnDesc, ColumnKind, PlaybackPlugin, ScrollMode, VizCaps, TrackerPosition,
+    VizInfo,
 };
 use std::os::raw::c_void;
 
@@ -19,12 +19,12 @@ pub struct VizSnapshot {
     pub columns: Vec<ColumnDesc>,
     pub pattern_channels: Vec<ChannelDesc>,
     pub scope_channels: Vec<ChannelDesc>,
-    pub position: VizPosition,
+    pub position: TrackerPosition,
     /// Per-channel current row, only in PerChannel scroll mode (else empty).
     pub channel_rows: Vec<u32>,
     /// Window `position.window_lo..window_hi`, row-major across pattern channels
     /// then columns (the `channel = -1` layout of `get_cells`).
-    pub cells: Vec<Cell>,
+    pub cells: Vec<PatternCell>,
     /// Per scope-channel waveform samples.
     pub scope: Vec<Vec<f32>>,
     /// Per pattern-channel VU level, only when the VU cap is advertised.
@@ -47,8 +47,8 @@ pub fn build_snapshot(
     user_data: *mut c_void,
     output_frame: u64,
 ) -> Option<VizSnapshot> {
-    let get_structure = plugin.get_structure?;
-    let mut st = VizStructure {
+    let get_structure = plugin.viz_info?;
+    let mut st = VizInfo {
         caps: 0,
         scroll_mode: ScrollMode::Synchronized,
         pattern_channel_count: 0,
@@ -63,25 +63,25 @@ pub fn build_snapshot(
     let columns = read_vec(
         st.column_count,
         ColumnDesc { label: [0; 16], char_width: 0, kind: ColumnKind::Note },
-        |ptr, cap| plugin.get_columns.map_or(0, |f| f(user_data, ptr, cap)),
+        |ptr, cap| plugin.tracker_columns.map_or(0, |f| f(user_data, ptr, cap)),
     );
 
     let chan_zero = ChannelDesc { name: [0; 24], scope_width: 0 };
     let pattern_channels = read_vec(st.pattern_channel_count, chan_zero, |ptr, cap| {
-        plugin.get_pattern_channels.map_or(0, |f| f(user_data, ptr, cap))
+        plugin.tracker_channels.map_or(0, |f| f(user_data, ptr, cap))
     });
     let scope_channels = read_vec(st.scope_channel_count, chan_zero, |ptr, cap| {
-        plugin.get_scope_channels.map_or(0, |f| f(user_data, ptr, cap))
+        plugin.scope_channels.map_or(0, |f| f(user_data, ptr, cap))
     });
 
     // A zeroed position means "not yet known"; skip cells rather than emit a
     // bogus row-0 window the consumer can't tell apart from real position 0.
-    let mut position = VizPosition { order: 0, pattern: 0, row: 0, window_lo: 0, window_hi: 0 };
-    let have_position = plugin.get_position.map_or(false, |f| f(user_data, &mut position));
+    let mut position = TrackerPosition { order: 0, pattern: 0, row: 0, window_lo: 0, window_hi: 0 };
+    let have_position = plugin.tracker_position.map_or(false, |f| f(user_data, &mut position));
 
     let channel_rows = if st.scroll_mode == ScrollMode::PerChannel {
         read_vec(st.pattern_channel_count, 0u32, |ptr, cap| {
-            plugin.get_channel_rows.map_or(0, |f| f(user_data, ptr, cap))
+            plugin.tracker_channel_rows.map_or(0, |f| f(user_data, ptr, cap))
         })
     } else {
         Vec::new()
@@ -92,9 +92,9 @@ pub fn build_snapshot(
         let cell_cap = rows
             .saturating_mul(st.pattern_channel_count)
             .saturating_mul(st.column_count);
-        read_vec(cell_cap, Cell { raw: 0, text: [0; 16] }, |ptr, cap| {
+        read_vec(cell_cap, PatternCell { raw: 0, text: [0; 16] }, |ptr, cap| {
             plugin
-                .get_cells
+                .tracker_cells
                 .map_or(0, |f| f(user_data, -1, position.window_lo, position.window_hi, ptr, cap))
         })
     } else {
@@ -103,7 +103,7 @@ pub fn build_snapshot(
 
     let mut scope = Vec::new();
     if caps.contains(VizCaps::SCOPE) {
-        if let Some(f) = plugin.get_scope_samples {
+        if let Some(f) = plugin.scope_samples {
             for ch in 0..st.scope_channel_count {
                 let mut buf = vec![0f32; SCOPE_SAMPLE_CAP];
                 let n = f(user_data, ch as i32, buf.as_mut_ptr(), SCOPE_SAMPLE_CAP as u32);
@@ -115,7 +115,7 @@ pub fn build_snapshot(
 
     let vu = if caps.contains(VizCaps::VU) {
         read_vec(st.pattern_channel_count, 0f32, |ptr, cap| {
-            plugin.get_vu.map_or(0, |f| f(user_data, ptr, cap))
+            plugin.vu_levels.map_or(0, |f| f(user_data, ptr, cap))
         })
     } else {
         Vec::new()
@@ -141,9 +141,9 @@ mod tests {
     use super::*;
 
     // A hand-written stub vtable with known viz outputs. user_data is unused.
-    extern "C" fn get_structure(_ud: *mut c_void, out: *mut VizStructure) -> bool {
+    extern "C" fn get_structure(_ud: *mut c_void, out: *mut VizInfo) -> bool {
         unsafe {
-            *out = VizStructure {
+            *out = VizInfo {
                 caps: (VizCaps::PATTERN_CELLS | VizCaps::SCOPE | VizCaps::VU).bits(),
                 scroll_mode: ScrollMode::Synchronized,
                 pattern_channel_count: 2,
@@ -179,9 +179,9 @@ mod tests {
         n as u32
     }
 
-    extern "C" fn get_position(_ud: *mut c_void, out: *mut VizPosition) -> bool {
+    extern "C" fn get_position(_ud: *mut c_void, out: *mut TrackerPosition) -> bool {
         unsafe {
-            *out = VizPosition { order: 1, pattern: 2, row: 4, window_lo: 0, window_hi: 8 };
+            *out = TrackerPosition { order: 1, pattern: 2, row: 4, window_lo: 0, window_hi: 8 };
         }
         true
     }
@@ -191,14 +191,14 @@ mod tests {
         _channel: i32,
         row_lo: u32,
         row_hi: u32,
-        out: *mut Cell,
+        out: *mut PatternCell,
         cap: u32,
     ) -> u32 {
         // channel == -1: all channels, row -> channel -> column (2 chans, 3 cols).
         let total = (row_hi - row_lo) as usize * 2 * 3;
         let n = total.min(cap as usize);
         for i in 0..n {
-            unsafe { *out.add(i) = Cell { raw: i as u32, text: [0; 16] } };
+            unsafe { *out.add(i) = PatternCell { raw: i as u32, text: [0; 16] } };
         }
         n as u32
     }
@@ -225,14 +225,14 @@ mod tests {
     fn stub_plugin() -> PlaybackPlugin {
         // Zeroed => all Option<fn> are None and pointers null; fill only the viz slots.
         let mut p: PlaybackPlugin = unsafe { std::mem::zeroed() };
-        p.get_structure = Some(get_structure);
-        p.get_columns = Some(get_columns);
-        p.get_pattern_channels = Some(get_pattern_channels);
-        p.get_scope_channels = Some(get_pattern_channels);
-        p.get_position = Some(get_position);
-        p.get_cells = Some(get_cells);
-        p.get_scope_samples = Some(get_scope_samples);
-        p.get_vu = Some(get_vu);
+        p.viz_info = Some(get_structure);
+        p.tracker_columns = Some(get_columns);
+        p.tracker_channels = Some(get_pattern_channels);
+        p.scope_channels = Some(get_pattern_channels);
+        p.tracker_position = Some(get_position);
+        p.tracker_cells = Some(get_cells);
+        p.scope_samples = Some(get_scope_samples);
+        p.vu_levels = Some(get_vu);
         p
     }
 
@@ -289,9 +289,9 @@ mod tests {
 
     // PerChannel scroll mode with only the PATTERN_CELLS cap: channel_rows is
     // populated, and the scope/vu cap-absent guards keep those vectors empty.
-    extern "C" fn get_structure_per_channel(_ud: *mut c_void, out: *mut VizStructure) -> bool {
+    extern "C" fn get_structure_per_channel(_ud: *mut c_void, out: *mut VizInfo) -> bool {
         unsafe {
-            *out = VizStructure {
+            *out = VizInfo {
                 caps: VizCaps::PATTERN_CELLS.bits(),
                 scroll_mode: ScrollMode::PerChannel,
                 pattern_channel_count: 3,
@@ -314,9 +314,9 @@ mod tests {
     #[test]
     fn snapshot_per_channel_and_cap_gating() {
         let mut p: PlaybackPlugin = unsafe { std::mem::zeroed() };
-        p.get_structure = Some(get_structure_per_channel);
-        p.get_position = Some(get_position);
-        p.get_channel_rows = Some(get_channel_rows);
+        p.viz_info = Some(get_structure_per_channel);
+        p.tracker_position = Some(get_position);
+        p.tracker_channel_rows = Some(get_channel_rows);
         // No scope/vu getters and the caps bits are clear; those vecs stay empty.
 
         let snap = build_snapshot(&p, std::ptr::null_mut(), 1).unwrap();
@@ -336,8 +336,8 @@ mod tests {
     #[test]
     fn unknown_position_yields_no_cells() {
         let mut p: PlaybackPlugin = unsafe { std::mem::zeroed() };
-        p.get_structure = Some(get_structure);
-        p.get_cells = Some(get_cells);
+        p.viz_info = Some(get_structure);
+        p.tracker_cells = Some(get_cells);
         // No get_position -> have_position is false -> cells stay empty.
         let snap = build_snapshot(&p, std::ptr::null_mut(), 0).unwrap();
         assert!(snap.cells.is_empty());

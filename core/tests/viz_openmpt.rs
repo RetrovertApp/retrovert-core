@@ -4,8 +4,8 @@
 use cfixed_string::CFixedString;
 use libloading::{Library, Symbol};
 use plugin_types::{
-    AudioFormat, AudioStreamFormat, Cell, ChannelDesc, ColumnDesc, ColumnKind, PlaybackPlugin,
-    ReadData, ReadInfo, ReadStatus, RVService, ScrollMode, VizCaps, VizPosition, VizStructure,
+    AudioFormat, AudioStreamFormat, PatternCell, ChannelDesc, ColumnDesc, ColumnKind, PlaybackPlugin,
+    ReadData, ReadInfo, ReadStatus, RVService, ScrollMode, VizCaps, TrackerPosition, VizInfo,
 };
 use services::PluginService;
 use std::path::PathBuf;
@@ -110,8 +110,8 @@ fn openmpt_viz_vtable() {
     render(plugin, user_data, 4);
 
     // --- structure ---
-    let mut st = VizStructure { caps: 0, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 0, scope_channel_count: 0, column_count: 0 };
-    assert!((plugin.get_structure.unwrap())(user_data, &mut st));
+    let mut st = VizInfo { caps: 0, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 0, scope_channel_count: 0, column_count: 0 };
+    assert!((plugin.viz_info.unwrap())(user_data, &mut st));
     assert!(st.caps & VizCaps::PATTERN_CELLS.bits() != 0);
     assert!(st.caps & VizCaps::SCOPE.bits() != 0);
     assert_eq!(st.scroll_mode, ScrollMode::Synchronized);
@@ -120,29 +120,29 @@ fn openmpt_viz_vtable() {
 
     // --- columns ---
     let mut cols = [ColumnDesc { label: [0; 16], char_width: 0, kind: ColumnKind::Custom }; 8];
-    let n = (plugin.get_columns.unwrap())(user_data, cols.as_mut_ptr(), cols.len() as u32);
+    let n = (plugin.tracker_columns.unwrap())(user_data, cols.as_mut_ptr(), cols.len() as u32);
     assert_eq!(n, 5);
     assert_eq!(cols[0].kind, ColumnKind::Note);
     assert_eq!(cols[4].kind, ColumnKind::Param);
 
     // --- channels ---
     let mut chans = [ChannelDesc { name: [0; 24], scope_width: 0 }; 64];
-    let nc = (plugin.get_pattern_channels.unwrap())(user_data, chans.as_mut_ptr(), chans.len() as u32);
+    let nc = (plugin.tracker_channels.unwrap())(user_data, chans.as_mut_ptr(), chans.len() as u32);
     assert_eq!(nc, 4);
     assert_ne!(chans[0].name[0], 0, "channel name should be populated");
 
     // --- position ---
-    let mut pos = VizPosition { order: 0, pattern: 0, row: 0, window_lo: 0, window_hi: 0 };
-    assert!((plugin.get_position.unwrap())(user_data, &mut pos));
+    let mut pos = TrackerPosition { order: 0, pattern: 0, row: 0, window_lo: 0, window_hi: 0 };
+    assert!((plugin.tracker_position.unwrap())(user_data, &mut pos));
     assert_eq!(pos.window_hi, 64, "window should span the 64-row pattern");
 
-    // get_channel_rows is 0 in Synchronized mode.
+    // tracker_channel_rows is 0 in Synchronized mode.
     let mut rows = [0u32; 4];
-    assert_eq!((plugin.get_channel_rows.unwrap())(user_data, rows.as_mut_ptr(), 4), 0);
+    assert_eq!((plugin.tracker_channel_rows.unwrap())(user_data, rows.as_mut_ptr(), 4), 0);
 
     // --- cells, all channels: row -> channel -> column ---
-    let mut cells = vec![Cell { raw: 0, text: [0; 16] }; 64 * 4 * 5];
-    let got = (plugin.get_cells.unwrap())(user_data, -1, 0, 64, cells.as_mut_ptr(), cells.len() as u32);
+    let mut cells = vec![PatternCell { raw: 0, text: [0; 16] }; 64 * 4 * 5];
+    let got = (plugin.tracker_cells.unwrap())(user_data, -1, 0, 64, cells.as_mut_ptr(), cells.len() as u32);
     assert_eq!(got, 64 * 4 * 5);
     let note_cell = |row: usize, ch: usize| &cells[(row * 4 + ch) * 5];
     let first = note_cell(0, 0);
@@ -150,14 +150,14 @@ fn openmpt_viz_vtable() {
     assert!(matches!(first.text[0], b'A'..=b'G'), "note text should render a note name, got {:?}", first.text[0] as char);
 
     // single channel: row -> column
-    let got1 = (plugin.get_cells.unwrap())(user_data, 0, 0, 64, cells.as_mut_ptr(), cells.len() as u32);
+    let got1 = (plugin.tracker_cells.unwrap())(user_data, 0, 0, 64, cells.as_mut_ptr(), cells.len() as u32);
     assert_eq!(got1, 64 * 5);
 
     // --- scope: non-silent on channel 0 ---
-    (plugin.set_scope_enabled.unwrap())(user_data, true);
+    (plugin.scope_enable.unwrap())(user_data, true);
     render(plugin, user_data, 20);
     let mut scope = vec![0f32; 1024];
-    let ns = (plugin.get_scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
+    let ns = (plugin.scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
     assert!(ns > 0, "scope returned no samples");
     let peak = scope[..ns as usize].iter().fold(0f32, |a, &x| a.max(x.abs()));
     assert!(peak > 1e-4, "scope is silent (peak {peak})");

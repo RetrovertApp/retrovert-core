@@ -1,14 +1,14 @@
 // dlopen the real spu plugin and drive the value-semantic viz vtable end to end,
 // proving the scope-only model: advertises Scope but no PatternCells, leaves every
 // pattern getter NULL, reports a single mono scope channel, and returns non-silent
-// scope only after an explicit set_scope_enabled (no hidden auto-on).
+// scope only after an explicit scope_enable (no hidden auto-on).
 // Skips (does not fail) if either the plugin .so or the test module is missing.
 
 use cfixed_string::CFixedString;
 use libloading::{Library, Symbol};
 use plugin_types::{
     AudioFormat, AudioStreamFormat, ChannelDesc, PlaybackPlugin, ReadData, ReadInfo, ReadStatus,
-    RVService, ScrollMode, VizCaps, VizStructure,
+    RVService, ScrollMode, VizCaps, VizInfo,
 };
 use services::PluginService;
 use std::path::PathBuf;
@@ -82,8 +82,8 @@ fn spu_viz_vtable() {
     render(plugin, user_data, 4);
 
     // --- structure: scope-only — Scope, no PatternCells ---
-    let mut st = VizStructure { caps: 0, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 0, scope_channel_count: 0, column_count: 0 };
-    assert!((plugin.get_structure.unwrap())(user_data, &mut st));
+    let mut st = VizInfo { caps: 0, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 0, scope_channel_count: 0, column_count: 0 };
+    assert!((plugin.viz_info.unwrap())(user_data, &mut st));
     assert!(st.caps & VizCaps::SCOPE.bits() != 0, "spu must advertise Scope");
     assert!(st.caps & VizCaps::PATTERN_CELLS.bits() == 0, "scope-only: must NOT advertise PatternCells");
     assert_eq!(st.pattern_channel_count, 0, "scope-only: no pattern channels");
@@ -91,16 +91,16 @@ fn spu_viz_vtable() {
     assert_eq!(st.scope_channel_count, 1, "spu is a single mono ADPCM stream");
 
     // --- scope-only contract: pattern getters are NULL ---
-    assert!(plugin.get_columns.is_none(), "scope-only: get_columns must be NULL");
-    assert!(plugin.get_pattern_channels.is_none(), "scope-only: get_pattern_channels must be NULL");
-    assert!(plugin.get_position.is_none(), "scope-only: get_position must be NULL");
-    assert!(plugin.get_channel_rows.is_none(), "scope-only: get_channel_rows must be NULL");
-    assert!(plugin.get_cells.is_none(), "scope-only: get_cells must be NULL");
-    assert!(plugin.get_vu.is_none(), "scope-only: get_vu must be NULL");
+    assert!(plugin.tracker_columns.is_none(), "scope-only: tracker_columns must be NULL");
+    assert!(plugin.tracker_channels.is_none(), "scope-only: tracker_channels must be NULL");
+    assert!(plugin.tracker_position.is_none(), "scope-only: tracker_position must be NULL");
+    assert!(plugin.tracker_channel_rows.is_none(), "scope-only: tracker_channel_rows must be NULL");
+    assert!(plugin.tracker_cells.is_none(), "scope-only: tracker_cells must be NULL");
+    assert!(plugin.vu_levels.is_none(), "scope-only: vu_levels must be NULL");
 
     // --- scope channel: single, named, mono ---
     let mut chans = vec![ChannelDesc { name: [0; 24], scope_width: 0 }; 1];
-    let nc = (plugin.get_scope_channels.unwrap())(user_data, chans.as_mut_ptr(), chans.len() as u32);
+    let nc = (plugin.scope_channels.unwrap())(user_data, chans.as_mut_ptr(), chans.len() as u32);
     assert_eq!(nc, 1, "scope channel count must match structure");
     assert_ne!(chans[0].name[0], 0, "scope channel name should be populated");
     assert_eq!(chans[0].scope_width, 0, "scope-only: mono scope width");
@@ -108,13 +108,13 @@ fn spu_viz_vtable() {
     // --- no hidden auto-on: scope yields nothing until explicitly enabled ---
     render(plugin, user_data, 4);
     let mut scope = vec![0f32; 1024];
-    let off = (plugin.get_scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
-    assert_eq!(off, 0, "scope must be silent before set_scope_enabled(true)");
+    let off = (plugin.scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
+    assert_eq!(off, 0, "scope must be silent before scope_enable(true)");
 
     // --- scope: non-silent samples after explicit enable on a known file ---
-    (plugin.set_scope_enabled.unwrap())(user_data, true);
+    (plugin.scope_enable.unwrap())(user_data, true);
     render(plugin, user_data, 20);
-    let ns = (plugin.get_scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
+    let ns = (plugin.scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
     let peak = scope[..ns as usize].iter().fold(0f32, |a, &x| a.max(x.abs()));
     assert!(peak > 1e-4, "scope is silent after enable (peak {peak})");
 

@@ -8,7 +8,7 @@ use cfixed_string::CFixedString;
 use libloading::{Library, Symbol};
 use plugin_types::{
     AudioFormat, AudioStreamFormat, ChannelDesc, PlaybackPlugin, ReadData, ReadInfo, ReadStatus,
-    RVService, ScrollMode, VizCaps, VizStructure,
+    RVService, ScrollMode, VizCaps, VizInfo,
 };
 use services::PluginService;
 use std::path::PathBuf;
@@ -87,8 +87,8 @@ fn sidplayfp_viz_vtable() {
     render(plugin, user_data, 4);
 
     // --- structure: metadata-only — Scope, no PatternCells, dynamic count > 8 ---
-    let mut st = VizStructure { caps: 0, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 0, scope_channel_count: 0, column_count: 0 };
-    assert!((plugin.get_structure.unwrap())(user_data, &mut st));
+    let mut st = VizInfo { caps: 0, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 0, scope_channel_count: 0, column_count: 0 };
+    assert!((plugin.viz_info.unwrap())(user_data, &mut st));
     assert!(st.caps & VizCaps::SCOPE.bits() != 0, "sidplayfp must advertise Scope");
     assert!(st.caps & VizCaps::PATTERN_CELLS.bits() == 0, "metadata-only: must NOT advertise PatternCells");
     assert_eq!(st.pattern_channel_count, 0, "metadata-only: no pattern channels");
@@ -98,24 +98,24 @@ fn sidplayfp_viz_vtable() {
 
     // --- metadata-only contract: no pattern grid is exposed; the cell getters are NULL,
     // so the host can never request a pattern view (AC #1: no grid, no crash). ---
-    assert!(plugin.get_columns.is_none(), "metadata-only: get_columns must be NULL");
-    assert!(plugin.get_pattern_channels.is_none(), "metadata-only: get_pattern_channels must be NULL");
-    assert!(plugin.get_position.is_none(), "metadata-only: get_position must be NULL");
-    assert!(plugin.get_channel_rows.is_none(), "metadata-only: get_channel_rows must be NULL");
-    assert!(plugin.get_cells.is_none(), "metadata-only: get_cells must be NULL");
+    assert!(plugin.tracker_columns.is_none(), "metadata-only: tracker_columns must be NULL");
+    assert!(plugin.tracker_channels.is_none(), "metadata-only: tracker_channels must be NULL");
+    assert!(plugin.tracker_position.is_none(), "metadata-only: tracker_position must be NULL");
+    assert!(plugin.tracker_channel_rows.is_none(), "metadata-only: tracker_channel_rows must be NULL");
+    assert!(plugin.tracker_cells.is_none(), "metadata-only: tracker_cells must be NULL");
 
     // --- scope channels: dynamic count > 8, each named, caller buffer sized from structure ---
     let mut chans = vec![ChannelDesc { name: [0; 24], scope_width: 0 }; scope_channels];
-    let nc = (plugin.get_scope_channels.unwrap())(user_data, chans.as_mut_ptr(), chans.len() as u32);
+    let nc = (plugin.scope_channels.unwrap())(user_data, chans.as_mut_ptr(), chans.len() as u32);
     assert_eq!(nc as usize, scope_channels, "scope channel count must match structure");
     assert_ne!(chans[0].name[0], 0, "scope channel name should be populated");
     assert_ne!(chans[scope_channels - 1].name[0], 0, "9th voice name should be populated (proves no 8-channel clamp)");
 
     // --- scope: non-silent samples on voice 0 of a known file ---
-    (plugin.set_scope_enabled.unwrap())(user_data, true);
+    (plugin.scope_enable.unwrap())(user_data, true);
     render(plugin, user_data, 20);
     let mut scope = vec![0f32; 1024];
-    let ns = (plugin.get_scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
+    let ns = (plugin.scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
     assert!(ns > 0, "scope returned no samples");
     let peak = scope[..ns as usize].iter().fold(0f32, |a, &x| a.max(x.abs()));
     assert!(peak > 1e-4, "scope is silent (peak {peak})");

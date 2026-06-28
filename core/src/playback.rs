@@ -317,7 +317,7 @@ fn incoming_msg(state: &mut PlaybackInternal, msg: &PlaybackMessage) {
                 *state.viz_snapshot.lock() = None;
             }
             // Capture scope buffers during read_data if the plugin supports it.
-            if let Some(f) = playback.plugin.set_scope_enabled {
+            if let Some(f) = playback.plugin.scope_enable {
                 f(playback.user_data, true);
             }
             state.players.push((playback.clone(), msg.clone()));

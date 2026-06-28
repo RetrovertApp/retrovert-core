@@ -1,5 +1,5 @@
 // dlopen the real xsf plugin and drive the value-semantic viz vtable. The static
-// scope-only wiring (scope getters present, pattern getters + get_vu NULL) is asserted
+// scope-only wiring (scope getters present, pattern getters + vu_levels NULL) is asserted
 // unconditionally. Two live paths follow:
 //   * xsf_viz_vtable      — a PSF file exposes the PSX SPU scope (caps = Scope, dynamic
 //                           voice count, no-auto-on contract). Needs the host PSX BIOS;
@@ -11,7 +11,7 @@ use cfixed_string::CFixedString;
 use libloading::{Library, Symbol};
 use plugin_types::{
     AudioFormat, AudioStreamFormat, ChannelDesc, PlaybackPlugin, ReadData, ReadInfo, ReadStatus,
-    RVService, ScrollMode, VizCaps, VizStructure,
+    RVService, ScrollMode, VizCaps, VizInfo,
 };
 use services::PluginService;
 use std::path::PathBuf;
@@ -82,17 +82,17 @@ fn xsf_viz_vtable() {
     assert_eq!(plugin.api_version, plugin_types::RV_PLAYBACK_PLUGIN_API_VERSION);
 
     // Vtable wiring (independent of any module): scope-only getters present,
-    // pattern getters and get_vu NULL. Verified even with no PSX BIOS on disk.
-    assert!(plugin.get_structure.is_some(), "xsf must implement get_structure");
-    assert!(plugin.get_scope_channels.is_some(), "xsf must implement get_scope_channels");
-    assert!(plugin.set_scope_enabled.is_some(), "xsf must implement set_scope_enabled");
-    assert!(plugin.get_scope_samples.is_some(), "xsf must implement get_scope_samples");
-    assert!(plugin.get_columns.is_none(), "scope-only: get_columns must be NULL");
-    assert!(plugin.get_pattern_channels.is_none(), "scope-only: get_pattern_channels must be NULL");
-    assert!(plugin.get_position.is_none(), "scope-only: get_position must be NULL");
-    assert!(plugin.get_channel_rows.is_none(), "scope-only: get_channel_rows must be NULL");
-    assert!(plugin.get_cells.is_none(), "scope-only: get_cells must be NULL");
-    assert!(plugin.get_vu.is_none(), "scope-only: get_vu must be NULL");
+    // pattern getters and vu_levels NULL. Verified even with no PSX BIOS on disk.
+    assert!(plugin.viz_info.is_some(), "xsf must implement viz_info");
+    assert!(plugin.scope_channels.is_some(), "xsf must implement scope_channels");
+    assert!(plugin.scope_enable.is_some(), "xsf must implement scope_enable");
+    assert!(plugin.scope_samples.is_some(), "xsf must implement scope_samples");
+    assert!(plugin.tracker_columns.is_none(), "scope-only: tracker_columns must be NULL");
+    assert!(plugin.tracker_channels.is_none(), "scope-only: tracker_channels must be NULL");
+    assert!(plugin.tracker_position.is_none(), "scope-only: tracker_position must be NULL");
+    assert!(plugin.tracker_channel_rows.is_none(), "scope-only: tracker_channel_rows must be NULL");
+    assert!(plugin.tracker_cells.is_none(), "scope-only: tracker_cells must be NULL");
+    assert!(plugin.vu_levels.is_none(), "scope-only: vu_levels must be NULL");
 
     let module = match std::fs::canonicalize(module_path()) {
         Ok(p) => p,
@@ -126,8 +126,8 @@ fn xsf_viz_vtable() {
     assert!(render(plugin, user_data, 4) > 0, "decoder produced no frames");
 
     // --- structure: scope-only — Scope, no PatternCells, dynamic SPU voice count ---
-    let mut st = VizStructure { caps: 0, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 0, scope_channel_count: 0, column_count: 0 };
-    assert!((plugin.get_structure.unwrap())(user_data, &mut st));
+    let mut st = VizInfo { caps: 0, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 0, scope_channel_count: 0, column_count: 0 };
+    assert!((plugin.viz_info.unwrap())(user_data, &mut st));
     assert!(st.caps & VizCaps::SCOPE.bits() != 0, "xsf (PSF) must advertise Scope");
     assert!(st.caps & VizCaps::PATTERN_CELLS.bits() == 0, "scope-only: must NOT advertise PatternCells");
     assert_eq!(st.pattern_channel_count, 0, "scope-only: no pattern channels");
@@ -137,7 +137,7 @@ fn xsf_viz_vtable() {
 
     // --- scope channels: dynamic count, each named, mono ---
     let mut chans = vec![ChannelDesc { name: [0; 24], scope_width: 0 }; scope_channels];
-    let nc = (plugin.get_scope_channels.unwrap())(user_data, chans.as_mut_ptr(), chans.len() as u32);
+    let nc = (plugin.scope_channels.unwrap())(user_data, chans.as_mut_ptr(), chans.len() as u32);
     assert_eq!(nc as usize, scope_channels, "scope channel count must match structure");
     assert_ne!(chans[0].name[0], 0, "scope channel name should be populated");
     assert_eq!(chans[0].scope_width, 0, "scope-only: mono scope width");
@@ -145,15 +145,15 @@ fn xsf_viz_vtable() {
     // --- no hidden auto-on: scope yields nothing until explicitly enabled ---
     render(plugin, user_data, 4);
     let mut scope = vec![0f32; 1024];
-    let off = (plugin.get_scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
-    assert_eq!(off, 0, "scope must be silent before set_scope_enabled(true)");
+    let off = (plugin.scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
+    assert_eq!(off, 0, "scope must be silent before scope_enable(true)");
 
     // --- scope: non-silent samples after explicit enable ---
-    (plugin.set_scope_enabled.unwrap())(user_data, true);
+    (plugin.scope_enable.unwrap())(user_data, true);
     render(plugin, user_data, 20);
     let mut found_peak = 0f32;
     for ch in 0..scope_channels as i32 {
-        let ns = (plugin.get_scope_samples.unwrap())(user_data, ch, scope.as_mut_ptr(), scope.len() as u32);
+        let ns = (plugin.scope_samples.unwrap())(user_data, ch, scope.as_mut_ptr(), scope.len() as u32);
         if ns > 0 {
             let p = scope[..ns as usize].iter().fold(0f32, |a, &x| a.max(x.abs()));
             found_peak = found_peak.max(p);
@@ -164,7 +164,7 @@ fn xsf_viz_vtable() {
     (plugin.destroy.unwrap())(user_data);
 }
 
-// A non-PSF xSF format (GSF / Game Boy Advance) has no scope: get_structure must
+// A non-PSF xSF format (GSF / Game Boy Advance) has no scope: viz_info must
 // honestly report caps = 0 and zero scope channels, and the scope getters must yield
 // nothing. This covers the xsf_get_structure non-PSF branch. GSF needs no BIOS.
 #[test]
@@ -204,19 +204,19 @@ fn xsf_non_psf_caps_zero() {
 
     assert!(render(plugin, user_data, 4) > 0, "GSF decoder produced no frames");
 
-    let mut st = VizStructure { caps: 0xFFFF_FFFF, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 9, scope_channel_count: 9, column_count: 9 };
-    assert!((plugin.get_structure.unwrap())(user_data, &mut st));
+    let mut st = VizInfo { caps: 0xFFFF_FFFF, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 9, scope_channel_count: 9, column_count: 9 };
+    assert!((plugin.viz_info.unwrap())(user_data, &mut st));
     assert_eq!(st.caps, 0, "non-PSF xSF must report caps = 0");
     assert_eq!(st.scope_channel_count, 0, "non-PSF xSF has no scope channels");
 
     let mut chans = vec![ChannelDesc { name: [0; 24], scope_width: 0 }; 4];
-    let nc = (plugin.get_scope_channels.unwrap())(user_data, chans.as_mut_ptr(), chans.len() as u32);
+    let nc = (plugin.scope_channels.unwrap())(user_data, chans.as_mut_ptr(), chans.len() as u32);
     assert_eq!(nc, 0, "non-PSF xSF returns no scope channels");
 
     let mut scope = vec![0f32; 1024];
-    (plugin.set_scope_enabled.unwrap())(user_data, true);
+    (plugin.scope_enable.unwrap())(user_data, true);
     render(plugin, user_data, 8);
-    let ns = (plugin.get_scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
+    let ns = (plugin.scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
     assert_eq!(ns, 0, "non-PSF xSF yields no scope samples");
 
     (plugin.destroy.unwrap())(user_data);

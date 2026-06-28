@@ -5,8 +5,8 @@
 use cfixed_string::CFixedString;
 use libloading::{Library, Symbol};
 use plugin_types::{
-    AudioFormat, AudioStreamFormat, Cell, ChannelDesc, ColumnDesc, ColumnKind, PlaybackPlugin,
-    ReadData, ReadInfo, ReadStatus, RVService, ScrollMode, VizCaps, VizPosition, VizStructure,
+    AudioFormat, AudioStreamFormat, PatternCell, ChannelDesc, ColumnDesc, ColumnKind, PlaybackPlugin,
+    ReadData, ReadInfo, ReadStatus, RVService, ScrollMode, VizCaps, TrackerPosition, VizInfo,
 };
 use services::PluginService;
 use std::path::PathBuf;
@@ -86,8 +86,8 @@ fn tfmx_viz_vtable() {
     render(plugin, user_data, 4);
 
     // --- structure: per-channel, non-synchronized ---
-    let mut st = VizStructure { caps: 0, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 0, scope_channel_count: 0, column_count: 0 };
-    assert!((plugin.get_structure.unwrap())(user_data, &mut st));
+    let mut st = VizInfo { caps: 0, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 0, scope_channel_count: 0, column_count: 0 };
+    assert!((plugin.viz_info.unwrap())(user_data, &mut st));
     assert!(st.caps & VizCaps::PATTERN_CELLS.bits() != 0);
     assert!(st.caps & VizCaps::SCOPE.bits() != 0);
     assert_eq!(st.scroll_mode, ScrollMode::PerChannel, "tfmx must advertise per-channel scrolling");
@@ -98,7 +98,7 @@ fn tfmx_viz_vtable() {
 
     // --- columns ---
     let mut cols = [ColumnDesc { label: [0; 16], char_width: 0, kind: ColumnKind::Custom }; 8];
-    let n = (plugin.get_columns.unwrap())(user_data, cols.as_mut_ptr(), cols.len() as u32);
+    let n = (plugin.tracker_columns.unwrap())(user_data, cols.as_mut_ptr(), cols.len() as u32);
     assert_eq!(n, 5);
     assert_eq!(cols[0].kind, ColumnKind::Note);
     assert_eq!(cols[3].kind, ColumnKind::Effect);
@@ -106,19 +106,19 @@ fn tfmx_viz_vtable() {
 
     // --- pattern channels ---
     let mut chans = [ChannelDesc { name: [0; 24], scope_width: 0 }; 64];
-    let nc = (plugin.get_pattern_channels.unwrap())(user_data, chans.as_mut_ptr(), chans.len() as u32);
+    let nc = (plugin.tracker_channels.unwrap())(user_data, chans.as_mut_ptr(), chans.len() as u32);
     assert_eq!(nc as usize, channels);
     assert_ne!(chans[0].name[0], 0, "channel name should be populated");
 
     // --- position: window spans the longest track ---
-    let mut pos = VizPosition { order: 0, pattern: 0, row: 0, window_lo: 0, window_hi: 0 };
-    assert!((plugin.get_position.unwrap())(user_data, &mut pos));
+    let mut pos = TrackerPosition { order: 0, pattern: 0, row: 0, window_lo: 0, window_hi: 0 };
+    assert!((plugin.tracker_position.unwrap())(user_data, &mut pos));
     assert!(pos.window_hi > 0, "window should span the pattern rows");
     let rows = pos.window_hi as usize;
 
     // --- per-channel scrolling: one independent row per channel ---
     let mut chrows = vec![0u32; channels];
-    let got_rows = (plugin.get_channel_rows.unwrap())(user_data, chrows.as_mut_ptr(), channels as u32);
+    let got_rows = (plugin.tracker_channel_rows.unwrap())(user_data, chrows.as_mut_ptr(), channels as u32);
     assert_eq!(got_rows as usize, channels, "per-channel mode reports one row per channel");
     for (i, &r) in chrows.iter().enumerate() {
         assert!(r <= pos.window_hi, "channel {i} row {r} outside window {}", pos.window_hi);
@@ -128,19 +128,19 @@ fn tfmx_viz_vtable() {
     // current rows genuinely diverge — the core property of the per-channel model (AC #1).
     render(plugin, user_data, 40);
     let mut chrows2 = vec![0u32; channels];
-    (plugin.get_channel_rows.unwrap())(user_data, chrows2.as_mut_ptr(), channels as u32);
+    (plugin.tracker_channel_rows.unwrap())(user_data, chrows2.as_mut_ptr(), channels as u32);
     assert!(chrows2.iter().any(|&r| r > 0), "per-channel playheads did not advance");
     let distinct: std::collections::HashSet<u32> = chrows2.iter().copied().collect();
     assert!(distinct.len() > 1, "expected channels at distinct rows (non-synchronized), got {chrows2:?}");
 
     // --- cells, all channels: row -> channel -> column (rectangular grid) ---
-    let mut cells = vec![Cell { raw: 0, text: [0; 16] }; rows * channels * 5];
-    let got = (plugin.get_cells.unwrap())(user_data, -1, 0, pos.window_hi, cells.as_mut_ptr(), cells.len() as u32);
+    let mut cells = vec![PatternCell { raw: 0, text: [0; 16] }; rows * channels * 5];
+    let got = (plugin.tracker_cells.unwrap())(user_data, -1, 0, pos.window_hi, cells.as_mut_ptr(), cells.len() as u32);
     assert_eq!(got as usize, rows * channels * 5);
 
     // single channel returns rows * columns
-    let mut one = vec![Cell { raw: 0, text: [0; 16] }; rows * 5];
-    let got1 = (plugin.get_cells.unwrap())(user_data, 0, 0, pos.window_hi, one.as_mut_ptr(), one.len() as u32);
+    let mut one = vec![PatternCell { raw: 0, text: [0; 16] }; rows * 5];
+    let got1 = (plugin.tracker_cells.unwrap())(user_data, 0, 0, pos.window_hi, one.as_mut_ptr(), one.len() as u32);
     assert_eq!(got1 as usize, rows * 5);
 
     // Content: at least one note cell renders a note name, and the effect encoding is
@@ -173,10 +173,10 @@ fn tfmx_viz_vtable() {
     assert!(saw_wait, "expected at least one WAIT effect (standardized raw + 'W' text)");
 
     // --- scope: non-silent on voice 0 ---
-    (plugin.set_scope_enabled.unwrap())(user_data, true);
+    (plugin.scope_enable.unwrap())(user_data, true);
     render(plugin, user_data, 20);
     let mut scope = vec![0f32; 1024];
-    let ns = (plugin.get_scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
+    let ns = (plugin.scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
     assert!(ns > 0, "scope returned no samples");
     let peak = scope[..ns as usize].iter().fold(0f32, |a, &x| a.max(x.abs()));
     assert!(peak > 1e-4, "scope is silent (peak {peak})");

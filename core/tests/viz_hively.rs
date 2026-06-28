@@ -5,8 +5,8 @@
 use cfixed_string::CFixedString;
 use libloading::{Library, Symbol};
 use plugin_types::{
-    AudioFormat, AudioStreamFormat, Cell, ChannelDesc, ColumnDesc, ColumnKind, PlaybackPlugin,
-    ReadData, ReadInfo, ReadStatus, RVService, ScrollMode, VizCaps, VizPosition, VizStructure,
+    AudioFormat, AudioStreamFormat, PatternCell, ChannelDesc, ColumnDesc, ColumnKind, PlaybackPlugin,
+    ReadData, ReadInfo, ReadStatus, RVService, ScrollMode, VizCaps, TrackerPosition, VizInfo,
 };
 use services::PluginService;
 use std::path::PathBuf;
@@ -80,8 +80,8 @@ fn hively_viz_vtable() {
     render(plugin, user_data, 4);
 
     // --- structure: synchronized pattern cells + scope, whole song known ---
-    let mut st = VizStructure { caps: 0, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 0, scope_channel_count: 0, column_count: 0 };
-    assert!((plugin.get_structure.unwrap())(user_data, &mut st));
+    let mut st = VizInfo { caps: 0, scroll_mode: ScrollMode::Synchronized, pattern_channel_count: 0, scope_channel_count: 0, column_count: 0 };
+    assert!((plugin.viz_info.unwrap())(user_data, &mut st));
     assert!(st.caps & VizCaps::PATTERN_CELLS.bits() != 0, "PatternCells cap missing");
     assert!(st.caps & VizCaps::SCOPE.bits() != 0, "Scope cap missing");
     assert!(st.caps & VizCaps::WHOLE_SONG_KNOWN.bits() != 0, "WholeSongKnown cap missing");
@@ -93,7 +93,7 @@ fn hively_viz_vtable() {
 
     // --- columns ---
     let mut cols = [ColumnDesc { label: [0; 16], char_width: 0, kind: ColumnKind::Custom }; 8];
-    let n = (plugin.get_columns.unwrap())(user_data, cols.as_mut_ptr(), cols.len() as u32);
+    let n = (plugin.tracker_columns.unwrap())(user_data, cols.as_mut_ptr(), cols.len() as u32);
     assert_eq!(n, 6);
     let want_kinds = [
         ColumnKind::Note, ColumnKind::Instrument, ColumnKind::Effect,
@@ -107,26 +107,26 @@ fn hively_viz_vtable() {
 
     // --- channels ---
     let mut ch = [ChannelDesc { name: [0; 24], scope_width: 0 }; 64];
-    let nc = (plugin.get_pattern_channels.unwrap())(user_data, ch.as_mut_ptr(), ch.len() as u32);
+    let nc = (plugin.tracker_channels.unwrap())(user_data, ch.as_mut_ptr(), ch.len() as u32);
     assert_eq!(nc as usize, chans);
     assert_ne!(ch[0].name[0], 0, "channel name should be populated");
     let mut scope_ch = [ChannelDesc { name: [0; 24], scope_width: 0 }; 64];
-    let nsc = (plugin.get_scope_channels.unwrap())(user_data, scope_ch.as_mut_ptr(), scope_ch.len() as u32);
+    let nsc = (plugin.scope_channels.unwrap())(user_data, scope_ch.as_mut_ptr(), scope_ch.len() as u32);
     assert_eq!(nsc as usize, chans);
     assert_eq!(scope_ch[0].scope_width, 1, "hively scope is mono");
 
     // --- position: window spans the track length ---
-    let mut pos = VizPosition { order: 0, pattern: 0, row: 0, window_lo: 0, window_hi: 0 };
-    assert!((plugin.get_position.unwrap())(user_data, &mut pos));
+    let mut pos = TrackerPosition { order: 0, pattern: 0, row: 0, window_lo: 0, window_hi: 0 };
+    assert!((plugin.tracker_position.unwrap())(user_data, &mut pos));
     assert!(pos.window_hi > pos.window_lo, "window should be non-empty");
     let rows = pos.window_hi as usize;
 
-    assert_eq!((plugin.get_channel_rows.unwrap())(user_data, std::ptr::null_mut(), 0), 0);
+    assert_eq!((plugin.tracker_channel_rows.unwrap())(user_data, std::ptr::null_mut(), 0), 0);
 
     // --- cells, all channels: row -> channel -> column ---
     let total = rows * chans * 6;
-    let mut all = vec![Cell { raw: 0, text: [0; 16] }; total];
-    let got = (plugin.get_cells.unwrap())(user_data, -1, 0, pos.window_hi, all.as_mut_ptr(), all.len() as u32);
+    let mut all = vec![PatternCell { raw: 0, text: [0; 16] }; total];
+    let got = (plugin.tracker_cells.unwrap())(user_data, -1, 0, pos.window_hi, all.as_mut_ptr(), all.len() as u32);
     assert_eq!(got as usize, total, "all-channel cell count mismatch");
 
     // Content checks: at least one note cell renders an A-G note name (raw + text),
@@ -158,8 +158,8 @@ fn hively_viz_vtable() {
     // single channel: row -> column, and content matches the channel-0 slice of the
     // all-channel fill (same raw per row/column) — proves the single-channel path
     // returns the right rows, not zeros or a wrong slice.
-    let mut one = vec![Cell { raw: 0, text: [0; 16] }; rows * 6];
-    let got1 = (plugin.get_cells.unwrap())(user_data, 0, 0, pos.window_hi, one.as_mut_ptr(), one.len() as u32);
+    let mut one = vec![PatternCell { raw: 0, text: [0; 16] }; rows * 6];
+    let got1 = (plugin.tracker_cells.unwrap())(user_data, 0, 0, pos.window_hi, one.as_mut_ptr(), one.len() as u32);
     assert_eq!(got1 as usize, rows * 6);
     for r in 0..rows {
         for col in 0..6 {
@@ -169,18 +169,18 @@ fn hively_viz_vtable() {
 
     // --- scope: silent until enabled, non-silent while enabled, silent again after disable ---
     let mut scope = vec![0f32; 1024];
-    let off = (plugin.get_scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
-    assert_eq!(off, 0, "scope must stay silent until set_scope_enabled(true)");
+    let off = (plugin.scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
+    assert_eq!(off, 0, "scope must stay silent until scope_enable(true)");
 
-    (plugin.set_scope_enabled.unwrap())(user_data, true);
+    (plugin.scope_enable.unwrap())(user_data, true);
     render(plugin, user_data, 20);
-    let ns = (plugin.get_scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
+    let ns = (plugin.scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
     assert!(ns > 0, "scope returned no samples");
     let peak = scope[..ns as usize].iter().fold(0f32, |a, &x| a.max(x.abs()));
     assert!(peak > 1e-4, "scope is silent (peak {peak})");
 
-    (plugin.set_scope_enabled.unwrap())(user_data, false);
-    let off2 = (plugin.get_scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
+    (plugin.scope_enable.unwrap())(user_data, false);
+    let off2 = (plugin.scope_samples.unwrap())(user_data, 0, scope.as_mut_ptr(), scope.len() as u32);
     assert_eq!(off2, 0, "scope must report nothing once disabled again");
 
     (plugin.destroy.unwrap())(user_data);

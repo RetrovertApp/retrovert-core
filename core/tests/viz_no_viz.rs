@@ -1,6 +1,6 @@
 // dlopen each no-visualization cohort plugin and prove the caps = 0 contract:
-// the api version is current and every viz vtable slot (get_structure through
-// get_vu) is NULL, so the host can only read caps = 0. Where a test module
+// the api version is current and every viz vtable slot (viz_info through
+// vu_levels) is NULL, so the host can only read caps = 0. Where a test module
 // exists, also prove the decoder still opens and produces audio (no regression).
 // Skips (does not fail) a plugin whose .so is not built.
 
@@ -134,16 +134,16 @@ fn no_viz_cohort_caps_zero() {
 
         // caps = 0 contract: there is no way to advertise any capability — every
         // viz vtable slot is NULL.
-        assert!(plugin.get_structure.is_none(), "{}: get_structure must be NULL", p.name);
-        assert!(plugin.get_columns.is_none(), "{}: get_columns must be NULL", p.name);
-        assert!(plugin.get_pattern_channels.is_none(), "{}: get_pattern_channels must be NULL", p.name);
-        assert!(plugin.get_scope_channels.is_none(), "{}: get_scope_channels must be NULL", p.name);
-        assert!(plugin.get_position.is_none(), "{}: get_position must be NULL", p.name);
-        assert!(plugin.get_channel_rows.is_none(), "{}: get_channel_rows must be NULL", p.name);
-        assert!(plugin.get_cells.is_none(), "{}: get_cells must be NULL", p.name);
-        assert!(plugin.set_scope_enabled.is_none(), "{}: set_scope_enabled must be NULL", p.name);
-        assert!(plugin.get_scope_samples.is_none(), "{}: get_scope_samples must be NULL", p.name);
-        assert!(plugin.get_vu.is_none(), "{}: get_vu must be NULL", p.name);
+        assert!(plugin.viz_info.is_none(), "{}: viz_info must be NULL", p.name);
+        assert!(plugin.tracker_columns.is_none(), "{}: tracker_columns must be NULL", p.name);
+        assert!(plugin.tracker_channels.is_none(), "{}: tracker_channels must be NULL", p.name);
+        assert!(plugin.scope_channels.is_none(), "{}: scope_channels must be NULL", p.name);
+        assert!(plugin.tracker_position.is_none(), "{}: tracker_position must be NULL", p.name);
+        assert!(plugin.tracker_channel_rows.is_none(), "{}: tracker_channel_rows must be NULL", p.name);
+        assert!(plugin.tracker_cells.is_none(), "{}: tracker_cells must be NULL", p.name);
+        assert!(plugin.scope_enable.is_none(), "{}: scope_enable must be NULL", p.name);
+        assert!(plugin.scope_samples.is_none(), "{}: scope_samples must be NULL", p.name);
+        assert!(plugin.vu_levels.is_none(), "{}: vu_levels must be NULL", p.name);
 
         // Lifecycle: create/destroy (+ the repositioned static_init/static_destroy
         // slots) must work on the migrated vtable even without a module — this is the
