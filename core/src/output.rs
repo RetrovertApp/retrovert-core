@@ -62,6 +62,19 @@ impl Output {
         }
     }
 
+    /// Whether the decode thread still has a player queued. Uses the position
+    /// query: a `TrackerPosition` reply means a player is active, `NoData` means
+    /// the queue is empty.
+    pub fn is_playing(&mut self) -> bool {
+        let (playback_send, self_recv) = bounded::<PlaybackReply>(1);
+
+        if self.playback_send.send(PlaybackMessage::GetTrackerPosition(playback_send)).is_err() {
+            return false;
+        }
+
+        matches!(self_recv.recv(), Ok(PlaybackReply::TrackerPosition(_)))
+    }
+
     pub fn create_default_output(&mut self) {
         let host = cpal::default_host();
         let Some(device) = host.default_output_device() else {

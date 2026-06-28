@@ -50,7 +50,7 @@ impl Core {
         plugins.report_loaded();
 
         let playback = Playback::new(plugins.resample_plugins.clone())?;
-        let playlist = Playlist::new(&vfs, &playback, plugins.decoder_plugins.clone())?;
+        let playlist = Playlist::new(&vfs, &playback, plugins.decoder_plugins.clone(), args.randomize)?;
         let mut output = Output::new(&playback);
 
         output.create_default_output();
@@ -70,6 +70,12 @@ impl Core {
 
     pub fn update(&mut self) -> u64 {
         self.output.get_position()
+    }
+
+    /// True while a song is queued or decoding. Goes false once the active
+    /// player finishes and is removed, which is how `--play` knows it's done.
+    pub fn is_playing(&mut self) -> bool {
+        self.output.is_playing()
     }
 }
 

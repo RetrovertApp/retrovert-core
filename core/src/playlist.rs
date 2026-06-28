@@ -87,14 +87,14 @@ pub struct PlaylistHandle {
 }
 
 impl PlaylistInternal {
-    fn new(vfs: &Vfs, playback: &Playback, playback_plugins: PlaybackPlugins) -> PlaylistInternal {
-        PlaylistInternal { 
+    fn new(vfs: &Vfs, playback: &Playback, playback_plugins: PlaybackPlugins, randomize: bool) -> PlaylistInternal {
+        PlaylistInternal {
             vfs: vfs.clone(),
             playback: playback.clone(),
             inprogress: Vec::new(),
             active_songs: Vec::new(),
             randomize_base_dir: String::new(),
-            mode: Mode::Default,
+            mode: if randomize { Mode::Randomize } else { Mode::Default },
             playback_plugins,
             missed_randomize_tries: 0,
         }
@@ -111,10 +111,10 @@ fn incoming_msg(state: &mut PlaylistInternal, msg: &PlaylistMessage) {
         },
 
         PlaylistMessage::PlayUrl(url, ret_msg) => {
-            state.mode = Mode::Randomize;
-            state.randomize_base_dir = url.to_owned();
+            if state.mode == Mode::Randomize {
+                state.randomize_base_dir = url.to_owned();
+            }
             trace!("Playlist: adding {} to vfs", url);
-            state.inprogress.push(VfsHandle::new(url, &state.vfs, Some(ret_msg.clone())));
             state.inprogress.push(VfsHandle::new(url, &state.vfs, Some(ret_msg.clone())));
         }
     }
@@ -328,10 +328,10 @@ impl Playlist {
         PlaylistHandle { recv: main_recv }
     }
 
-    pub fn new(vfs: &Vfs, playback: &Playback, playback_plugins: PlaybackPlugins) -> Result<Playlist> {
+    pub fn new(vfs: &Vfs, playback: &Playback, playback_plugins: PlaybackPlugins, randomize: bool) -> Result<Playlist> {
         let (main_send, thread_recv) = unbounded::<PlaylistMessage>();
-                
-        let mut state = PlaylistInternal::new(vfs, playback, playback_plugins);
+
+        let mut state = PlaylistInternal::new(vfs, playback, playback_plugins, randomize);
 
         trace!("Playlist create");
 

@@ -53,8 +53,27 @@ fn main() -> Result<()> {
         core.load_url(url);
     }
 
+    // Play the queued song(s) to the end, then exit. Loading + decoding starts
+    // asynchronously, so wait for playback to begin before watching for its end.
+    // ponytail: fixed 5s start timeout; bump it if slow (e.g. network) sources land.
+    let start = std::time::Instant::now();
+    let mut started = false;
     loop {
-        core.update();
+        if core.is_playing() {
+            started = true;
+        } else if started {
+            break;
+        } else if start.elapsed() > std::time::Duration::from_secs(5) {
+            error!("Nothing started playing within 5s; exiting");
+            break;
+        }
+
         std::thread::sleep(std::time::Duration::from_millis(16));
     }
+
+    // Let the buffered tail (up to ~1s, half the ring buffer) drain to the
+    // speakers before the cpal stream is dropped.
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+
+    Ok(())
 }
