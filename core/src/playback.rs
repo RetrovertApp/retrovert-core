@@ -24,23 +24,6 @@ use crate::visualization::{build_snapshot, VizSnapshot};
 /// UI thread. `None` until the active plugin produces its first frame.
 pub type VizSnapshotSlot = Arc<Mutex<Option<VizSnapshot>>>;
 
-#[derive(Default)]
-pub struct PlaybackSettings {
-    /// How many ms to pre-buffer
-    pub buffer_len_ms: usize,
-    /// Max CPU load in percent on the decoder thread
-    pub max_cpu_load: usize,
-}
-
-/*
-impl PlaybackSettings {
-    fn new() -> PlaybackSettings {
-        // 2000 ms of buffering and approx max 90% cpu load
-        PlaybackSettings { buffer_len_ms: 2000, max_cpu_load: 90 }
-    }
-}
-*/
-
 // Temp buffer size is 1 sec of audio data for 2 channels floats
 const TEMP_BUFFER_SIZE: usize = 48000 * 4 * 2;
 const DEFAULT_AUDIO_FORMAT: AudioFormat = AudioFormat {
@@ -136,7 +119,8 @@ pub struct PlaybackInternal {
     internal_format: AudioFormat,
     // Format used for the current playing plugin
     plugin_format: AudioFormat,
-    /// TODO: Keep a cache of these?
+    /// Format of the most recent output request; the output resampler is only
+    /// reconfigured when a request format differs from this.
     last_request_format: AudioFormat,
     /// Cumulative frames decoded for the active plugin; stamped onto each snapshot.
     output_frame: u64,
@@ -151,19 +135,13 @@ pub enum PlaybackMessage {
 }
 
 pub enum PlaybackReply {
-    /// Playback of requsted file has started
-    PlaybackStarted,
     /// Playback of the request has ended
     PlaybackEnded,
-    /// This reply can happen if the decoder thread hasn't generated enough data.
-    OutOfData,
-    /// Generated if the request is invalid (i.e too large size etc) 
-    InvalidRequest,
-    /// This will happen if no data has been generated yet 
+    /// No data is available yet for the request
     NoData,
-    /// Returns data back to the requster
+    /// Current tracker position for the active player
     TrackerPosition(u64),
-    /// Returns data back to the requster
+    /// Returns generated audio data back to the requester
     Data(Box<[u8]>),
 }
 
@@ -180,11 +158,8 @@ impl PlaybackInternal {
         plugin_resampler: ResamplePluginInstance,
         viz_snapshot: VizSnapshotSlot,
     ) -> PlaybackInternal {
-        // TODO: Should be passed in
-        //let settings = PlaybackSettings::new();
         let ring_buffer_size = get_byte_size_format(DEFAULT_AUDIO_FORMAT, DEFAULT_AUDIO_FORMAT.sample_rate as usize * 2);
         PlaybackInternal {
-            //settings,
             // 2 sec of buffering for now
             ring_buffer: vec![0u8; ring_buffer_size],
             temp_gen: [vec![0u8; TEMP_BUFFER_SIZE], vec![0u8; TEMP_BUFFER_SIZE]],
@@ -240,31 +215,29 @@ fn get_data(state: &mut PlaybackInternal, format: AudioFormat, frames: usize, ms
         state.last_request_format = format;
     }
 
+    // A dropped reply receiver just means the requester gave up; ignore the
+    // send error rather than panicking the decode thread.
     if state.read_index >= state.write_index {
-        msg.send(PlaybackReply::NoData).unwrap();
+        let _ = msg.send(PlaybackReply::NoData);
         return;
     }
 
-    // TODO: Verify that that requested size is reasonable
     let output_bytes_size = get_byte_size_format(format, frames);
-    let ring_buffer_len = state.ring_buffer.len(); 
+    let ring_buffer_len = state.ring_buffer.len();
 
     // if we haven't generated any data yet
     if output_bytes_size as u64 > state.write_index.value {
-        msg.send(PlaybackReply::NoData).unwrap();
+        let _ = msg.send(PlaybackReply::NoData);
         return;
     }
 
-    // TODO: Uninit
     let mut dest = vec![0u8; output_bytes_size].into_boxed_slice();
 
     let read_index = state.read_index.get();
 
     // if format differs from the default format we need to convert it
     if format != DEFAULT_AUDIO_FORMAT {
-        //trace!("converting from {:?} -> {:?}", DEFAULT_AUDIO_FORMAT, format);
-
-        let required_input_frames = unsafe { 
+        let required_input_frames = unsafe {
             (state.output_resampler.plugin.get_required_input_frame_count.unwrap())(state.output_resampler.user_data, frames as _)
         };
 
@@ -310,13 +283,12 @@ fn get_data(state: &mut PlaybackInternal, format: AudioFormat, frames: usize, ms
         state.read_index.bump_generation();
     }
 
-    msg.send(PlaybackReply::Data(dest)).unwrap();
-} 
+    let _ = msg.send(PlaybackReply::Data(dest));
+}
 
 /// Handles incoming messages (usually from the main thread)
 fn incoming_msg(state: &mut PlaybackInternal, msg: &PlaybackMessage) {
     match msg {
-        // TODO: Implement
         PlaybackMessage::QueuePlayback(playback, msg) => {
             // ponytail: single-file case — reset the frame stamp when the queue
             // was empty; a deeper queue keeps the active plugin's count.
@@ -337,7 +309,7 @@ fn incoming_msg(state: &mut PlaybackInternal, msg: &PlaybackMessage) {
 
         PlaybackMessage::GetTrackerPosition(msg) => {
             if state.players.is_empty() {
-                msg.send(PlaybackReply::NoData).unwrap();
+                let _ = msg.send(PlaybackReply::NoData);
                 return;
             }
 
@@ -345,7 +317,7 @@ fn incoming_msg(state: &mut PlaybackInternal, msg: &PlaybackMessage) {
             let mut output_data = [0u8; 8];
             unsafe { (player.plugin.event.unwrap())(player.user_data, output_data.as_mut_ptr(), 8) };
             let pos = u64::from_le_bytes(output_data);
-            msg.send(PlaybackReply::TrackerPosition(pos)).unwrap();
+            let _ = msg.send(PlaybackReply::TrackerPosition(pos));
         }
     }
 }
@@ -378,9 +350,8 @@ fn update(state: &mut PlaybackInternal) -> bool {
 
     let ring_size = state.ring_buffer.len();
     // get the read offset adjusted w
-    let write_index = state.write_index.value; 
+    let write_index = state.write_index.value;
 
-    // TODO: Fix this code, it's really ugly
     let read_cmp = if (state.read_index.get() + ring_size / 2) > ring_size {
         let diff = (state.read_index.get() + ring_size / 2) - ring_size; 
         (state.read_index.value + (1 << 32u64)) & 0xffff_ffff_0000_0000 | diff as u64
@@ -388,17 +359,16 @@ fn update(state: &mut PlaybackInternal) -> bool {
         state.read_index.value + ring_size as u64 / 2
     };
 
-    // if write index is larger than read_index + half the size of the ring buffer we don't  generate any more data 
+    // if write index is larger than read_index + half the size of the ring buffer we don't generate any more data
     if write_index > read_cmp {
-        //trace!("Write is twice as large as read index, no extra data generated");
         return true;
     }
 
     // Owned so the viz snapshot can read the plugin while `state` is mutated below.
     let player = state.players[0].0.clone();
 
-    // TODO: Use configured audio format
-    // TODO: Fix hard-coded frames-count
+    // ponytail: fixed 1024-frame decode chunk at the internal format; make the
+    // chunk size and format configurable if a plugin needs it.
     let read_info = ReadInfo {
         format: state.internal_format,
         frame_count: 1024,
@@ -427,10 +397,8 @@ fn update(state: &mut PlaybackInternal) -> bool {
     if info.format == state.internal_format {
         copy_buffer_to_ring(state, info.frame_count as _, 0);
     } else {
-        // make sure 
+        // reconfigure the plugin resampler whenever the plugin's output format changes
         if state.plugin_format != info.format {
-            dbg!(state.internal_format);
-            dbg!(info.format);
             let config = ConvertConfig { input: info.format, output: state.internal_format };
             unsafe { (state.plugin_resampler.plugin.set_config.unwrap())(state.plugin_resampler.user_data, &config) };
             state.plugin_format = info.format;
@@ -461,7 +429,7 @@ fn update(state: &mut PlaybackInternal) -> bool {
     // info check if we have finished reading from this plugin and if that is the case we will close it and remove it from the player list
     if info.status == ReadStatus::Finished {
         let player = &state.players[0].0;
-        state.players[0].1.send(PlaybackReply::PlaybackEnded).unwrap();
+        let _ = state.players[0].1.send(PlaybackReply::PlaybackEnded);
         unsafe { (player.plugin.destroy.unwrap())(player.user_data) };
         state.players.remove(0);
         trace!("Playback finished - players left {}", state.players.len());
@@ -765,10 +733,7 @@ mod tests {
     impl std::fmt::Debug for PlaybackReplyName<'_> {
         fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             let s = match self.0 {
-                PlaybackReply::PlaybackStarted => "PlaybackStarted",
                 PlaybackReply::PlaybackEnded => "PlaybackEnded",
-                PlaybackReply::OutOfData => "OutOfData",
-                PlaybackReply::InvalidRequest => "InvalidRequest",
                 PlaybackReply::NoData => "NoData",
                 PlaybackReply::TrackerPosition(_) => "TrackerPosition",
                 PlaybackReply::Data(_) => "Data",

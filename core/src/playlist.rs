@@ -11,27 +11,23 @@ use rand::{thread_rng, Rng, rngs::ThreadRng};
 use crate::plugin_handler::{PlaybackPlugins};
 use crate::playback::{Playback, PlaybackHandle, PlaybackPluginInstance, PlaybackReply};
 
-/// Mode of the playlist such as play next song, ranhdomize, etc 
+/// How the playlist picks what to play once the current file finishes.
 #[derive(PartialEq)]
 enum Mode {
-    /// Do nothing 
+    /// Play only what was explicitly requested; do nothing when it ends.
     Default,
-    /// Go to the next song in the playlist
-    //NextSong,
-    /// Randomize the playlist 
+    /// Keep playing random files drawn from `randomize_base_dir`.
     Randomize,
 }
 pub(crate) struct VfsHandle {
-    /// Original Url that was requested to be loaded 
+    /// Original Url that was requested to be loaded
     pub(crate) url: String,
     /// Handle to check status for the loading/processing on the VFS
     pub(crate) vfs_handle: vfs::Handle,
-    // Message to send back to main thread
-    //pub(crate) ret_msg: Option<crossbeam_channel::Sender<PlaylistReply>>,
 }
 
 impl VfsHandle {
-    fn new(url: &str, vfs: &Vfs, _ret_msg: Option<crossbeam_channel::Sender<PlaylistReply>>) -> VfsHandle {
+    fn new(url: &str, vfs: &Vfs) -> VfsHandle {
         VfsHandle {
             url: url.to_owned(),
             vfs_handle: vfs.load_url(url),
@@ -58,32 +54,20 @@ struct PlaylistInternal {
     missed_randomize_tries: usize,
 }
 
-// Replies from the Playlist
-pub enum PlaylistReply {
-    /// When the path isn't found
-    NotFound(String),
-    /// Path isn't supported
-    NotSupported(String),
-    /// Path isn't supported
-    PlaybackStarted(String),
-}
+/// Number of consecutive empty randomize draws before giving up.
+const MAX_RANDOMIZE_MISSES: usize = 10;
 
 // Messages to send to play list
 pub enum PlaylistMessage {
-    /// Add url to the playlist 
-    AddUrl(String, crossbeam_channel::Sender<PlaylistReply>),
-    /// Add url to the playlist and start playing it 
-    PlayUrl(String, crossbeam_channel::Sender<PlaylistReply>),
+    /// Enqueue a url for playback without making it the randomize anchor.
+    AddUrl(String),
+    /// Enqueue a url and make it the randomize base dir (the "play this" anchor).
+    PlayUrl(String),
 }
 
 pub struct Playlist {
     /// for sending messages to the main-thread
     main_send: crossbeam_channel::Sender<PlaylistMessage>,
-}
-
-/// Handle to check state of message sent
-pub struct PlaylistHandle {
-    pub recv: crossbeam_channel::Receiver<PlaylistReply>,
 }
 
 impl PlaylistInternal {
@@ -104,18 +88,20 @@ impl PlaylistInternal {
 /// Handles incoming messages (usually from the main thread)
 fn incoming_msg(state: &mut PlaylistInternal, msg: &PlaylistMessage) {
     match msg {
-        // TODO: Implement
-        PlaylistMessage::AddUrl(_path, _ret_msg) => {
-            //let vfs_handle = state.vfs.load_url(path);
-            //state.inprogress.push(VfsHandle::new(vfs_handle, ret_msg, ActionAfterLoad::AddUrl));
-        },
+        // Both variants append to the load queue; the decode thread plays the
+        // resulting players in sequence. PlayUrl additionally sets the randomize
+        // base dir, AddUrl leaves it untouched so it doesn't redirect Randomize mode.
+        PlaylistMessage::AddUrl(url) => {
+            trace!("Playlist: enqueuing {} to vfs", url);
+            state.inprogress.push(VfsHandle::new(url, &state.vfs));
+        }
 
-        PlaylistMessage::PlayUrl(url, ret_msg) => {
+        PlaylistMessage::PlayUrl(url) => {
             if state.mode == Mode::Randomize {
                 state.randomize_base_dir = url.to_owned();
             }
             trace!("Playlist: adding {} to vfs", url);
-            state.inprogress.push(VfsHandle::new(url, &state.vfs, Some(ret_msg.clone())));
+            state.inprogress.push(VfsHandle::new(url, &state.vfs));
         }
     }
 }
@@ -148,9 +134,7 @@ fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: &[u8], pr
                 continue;
             }
 
-            // TODO: Fix settings
             let c_name = CFixedString::from_str(&url);
-            //let open_state = unsafe { ((player.plugin_funcs).open_from_memory)(user_data, data.as_ptr(), data.len() as _, 0, ptr::null()) };
             let open_state = unsafe {
                 (player.plugin_funcs.open.unwrap())(user_data, c_name.as_ptr(), 0, service_funcs as *const _)
             };
@@ -164,10 +148,11 @@ fn find_playback_plugin(state: &mut PlaylistInternal, url: &str, data: &[u8], pr
             info!("Queueing playback: {}", &state.inprogress[progress_index].url);
 
             let instance = PlaybackPluginInstance { user_data, plugin: player.plugin_funcs };
-            let playing_track = state.playback.queue_playback(instance).unwrap();
+            match state.playback.queue_playback(instance) {
+                Ok(playing_track) => state.active_songs.push(playing_track),
+                Err(e) => error!("Unable to queue playback for {}: {}", url, e),
+            }
 
-            state.active_songs.push(playing_track);
-            
             return true;
         }
     }
@@ -183,10 +168,10 @@ fn get_next_song(state: &mut PlaylistInternal, prev_index: Option<usize>) {
 
         // randomize from base dir
         if let Some(prev_index) = prev_index {
-            state.inprogress[prev_index] = VfsHandle::new(&state.randomize_base_dir, &state.vfs, None);
+            state.inprogress[prev_index] = VfsHandle::new(&state.randomize_base_dir, &state.vfs);
         } else {
             info!("Pushing {} to load", state.randomize_base_dir);
-            state.inprogress.push(VfsHandle::new(&state.randomize_base_dir, &state.vfs, None));
+            state.inprogress.push(VfsHandle::new(&state.randomize_base_dir, &state.vfs));
         }
     }
 }
@@ -202,17 +187,15 @@ fn update_get_directory(state: &mut PlaylistInternal, files_dirs: FilesDirs, rng
             // to play. At that point we stop trying and should report it back to the user (currently we just log)
             if total_len == 0 {
                 state.missed_randomize_tries += 1;
-                // TODO: User configurable
-                if state.missed_randomize_tries >= 10 {
-                    info!("Tried to randomize {} tries without finding anything playable. Stopping", 10);
+                if state.missed_randomize_tries >= MAX_RANDOMIZE_MISSES {
+                    info!("Tried to randomize {} tries without finding anything playable. Stopping", MAX_RANDOMIZE_MISSES);
                     state.mode = Mode::Default;
                     state.inprogress.swap_remove(progress_index);
                     return;
                 }
 
                 // if we couldn't find anything in the current directory we re-randomize from the base path
-                // TODO: Fix ret message
-                state.inprogress[progress_index] = VfsHandle::new(&state.randomize_base_dir, &state.vfs, None);
+                state.inprogress[progress_index] = VfsHandle::new(&state.randomize_base_dir, &state.vfs);
                 return;
             }
 
@@ -225,7 +208,7 @@ fn update_get_directory(state: &mut PlaylistInternal, files_dirs: FilesDirs, rng
 
             let path = Path::new(&state.inprogress[progress_index].url).join(url);
             let p = path.to_string_lossy();
-            state.inprogress[progress_index] = VfsHandle::new(&p, &state.vfs, None);
+            state.inprogress[progress_index] = VfsHandle::new(&p, &state.vfs);
 
             state.missed_randomize_tries = 0;
         }
@@ -250,12 +233,8 @@ fn update(state: &mut PlaylistInternal, rng: &mut ThreadRng) {
     // Process loading in progress
     let mut i = 0;
 
-    //let mut new_handles = Vec::new();
-
     while i < state.inprogress.len() {
         let handle = &state.inprogress[i];
-
-        //trace!("state name {} : {}", i, handle.url);
 
         match handle.vfs_handle.recv.try_recv() {
             Ok(VfsRecvMsg::Error(err)) => {
@@ -281,9 +260,6 @@ fn update(state: &mut PlaylistInternal, rng: &mut ThreadRng) {
         let handle = &state.active_songs[i];
 
         match handle.channel.try_recv() {
-            Ok(PlaybackReply::PlaybackStarted) => {
-                trace!("Playback started");
-            }
             Ok(PlaybackReply::PlaybackEnded) => {
                 trace!("Playback ended");
                 state.active_songs.remove(i);
@@ -294,38 +270,28 @@ fn update(state: &mut PlaylistInternal, rng: &mut ThreadRng) {
         i += 1;
     }
 
-    //trace!("active songs {} inprogress {}", state.active_songs.len(), state.inprogress.len());
-
     if state.active_songs.len() == 1 && state.inprogress.is_empty() {
         get_next_song(state, None);
     }
 }
 
 impl Playlist {
-    /// Add url to the playlist
-    pub fn add_url(&self, path: &str) -> PlaylistHandle {
-        let (thread_send, main_recv) = unbounded::<PlaylistReply>();
+    /// Enqueue a url for playback without making it the randomize anchor.
+    pub fn add_url(&self, path: &str) {
+        trace!("Playlist: enqueuing {}", path);
 
-        trace!("Playlist: adding {}", path);
-
-        self.main_send
-            .send(PlaylistMessage::AddUrl(path.into(), thread_send))
-            .unwrap();
-
-        PlaylistHandle { recv: main_recv }
+        if let Err(e) = self.main_send.send(PlaylistMessage::AddUrl(path.into())) {
+            error!("Playlist thread is gone, cannot enqueue {}: {}", path, e);
+        }
     }
 
-    /// Add url to playlist and play it 
-    pub fn play_url(&self, path: &str) -> PlaylistHandle {
-        let (thread_send, main_recv) = unbounded::<PlaylistReply>();
-
+    /// Enqueue a url and make it the randomize base dir.
+    pub fn play_url(&self, path: &str) {
         trace!("Playlist: adding for playback {}", path);
 
-        self.main_send
-            .send(PlaylistMessage::PlayUrl(path.into(), thread_send))
-            .unwrap();
-
-        PlaylistHandle { recv: main_recv }
+        if let Err(e) = self.main_send.send(PlaylistMessage::PlayUrl(path.into())) {
+            error!("Playlist thread is gone, cannot play {}: {}", path, e);
+        }
     }
 
     pub fn new(vfs: &Vfs, playback: &Playback, playback_plugins: PlaybackPlugins, randomize: bool) -> Result<Playlist> {
