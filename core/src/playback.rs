@@ -171,11 +171,19 @@ impl PlaybackInternal {
     fn new(resample_plugins: ResamplePlugins, viz_snapshot: VizSnapshotSlot) -> Result<PlaybackInternal> {
         let output_resampler = Self::create_default_resample_plugin(&resample_plugins)?;
         let plugin_resampler = Self::create_default_resample_plugin(&resample_plugins)?;
+        Ok(Self::with_resamplers(resample_plugins, output_resampler, plugin_resampler, viz_snapshot))
+    }
 
+    fn with_resamplers(
+        resample_plugins: ResamplePlugins,
+        output_resampler: ResamplePluginInstance,
+        plugin_resampler: ResamplePluginInstance,
+        viz_snapshot: VizSnapshotSlot,
+    ) -> PlaybackInternal {
         // TODO: Should be passed in
         //let settings = PlaybackSettings::new();
         let ring_buffer_size = get_byte_size_format(DEFAULT_AUDIO_FORMAT, DEFAULT_AUDIO_FORMAT.sample_rate as usize * 2);
-        Ok(PlaybackInternal { 
+        PlaybackInternal {
             //settings,
             // 2 sec of buffering for now
             ring_buffer: vec![0u8; ring_buffer_size],
@@ -191,7 +199,7 @@ impl PlaybackInternal {
             plugin_format: DEFAULT_AUDIO_FORMAT,
             output_frame: 0,
             viz_snapshot,
-        })
+        }
     }
 
     fn create_default_resample_plugin(resample_plugins: &ResamplePlugins) -> Result<ResamplePluginInstance> {
@@ -464,10 +472,27 @@ fn update(state: &mut PlaybackInternal) -> bool {
 
 impl Playback {
     pub fn new(resample_plugins: ResamplePlugins) -> Result<Playback> {
-        let (channel, thread_recv) = unbounded::<PlaybackMessage>();
-
         let viz_snapshot: VizSnapshotSlot = Arc::new(Mutex::new(None));
-        let mut state = PlaybackInternal::new(resample_plugins, viz_snapshot.clone())?;
+        let state = PlaybackInternal::new(resample_plugins, viz_snapshot.clone())?;
+        Self::spawn(state, viz_snapshot)
+    }
+
+    /// Build a playback with caller-supplied resampler instances and an empty
+    /// plugin registry. Only used by tests, which fabricate the resamplers
+    /// instead of dlopen-ing real plugins.
+    #[cfg(test)]
+    fn new_with_resamplers(
+        output_resampler: ResamplePluginInstance,
+        plugin_resampler: ResamplePluginInstance,
+    ) -> Result<Playback> {
+        let viz_snapshot: VizSnapshotSlot = Arc::new(Mutex::new(None));
+        let registry = Arc::new(parking_lot::RwLock::new(Vec::new()));
+        let state = PlaybackInternal::with_resamplers(registry, output_resampler, plugin_resampler, viz_snapshot.clone());
+        Self::spawn(state, viz_snapshot)
+    }
+
+    fn spawn(mut state: PlaybackInternal, viz_snapshot: VizSnapshotSlot) -> Result<Playback> {
+        let (channel, thread_recv) = unbounded::<PlaybackMessage>();
 
         // Setup worker thread
         thread::Builder::new()
@@ -501,5 +526,255 @@ pub fn get_byte_size_format(format: AudioFormat, frames: usize) -> usize {
     };
 
     stream_size * format.channel_count as usize * frames
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossbeam_channel::unbounded;
+    use std::ptr;
+
+    fn fake_name() -> *const core::ffi::c_char {
+        b"fake\0".as_ptr() as *const core::ffi::c_char
+    }
+
+    // --- fabricated identity resampler (input == output == DEFAULT_AUDIO_FORMAT) ---
+
+    extern "C" fn r_set_config(_ud: *mut c_void, _cfg: *const ConvertConfig) {}
+    extern "C" fn r_passthru(_ud: *mut c_void, n: u32) -> u32 { n }
+    extern "C" fn r_convert(_ud: *mut c_void, out: *mut c_void, inp: *mut c_void, n: u32) -> u32 {
+        let bytes = get_byte_size_format(DEFAULT_AUDIO_FORMAT, n as usize);
+        unsafe { ptr::copy_nonoverlapping(inp as *const u8, out as *mut u8, bytes) };
+        n
+    }
+
+    fn noop_resampler() -> ResamplePluginInstance {
+        ResamplePluginInstance {
+            user_data: ptr::null_mut(),
+            plugin: ResamplePlugin {
+                api_version: plugin_types::RV_RESAMPLE_PLUGIN_API_VERSION,
+                name: fake_name(),
+                version: fake_name(),
+                library_version: fake_name(),
+                create: None,
+                destroy: None,
+                set_config: Some(r_set_config),
+                convert: Some(r_convert),
+                get_expected_output_frame_count: Some(r_passthru),
+                get_required_input_frame_count: Some(r_passthru),
+                static_init: None,
+                settings_updated: None,
+            },
+        }
+    }
+
+    fn make_internal() -> PlaybackInternal {
+        let registry = Arc::new(parking_lot::RwLock::new(Vec::new()));
+        PlaybackInternal::with_resamplers(
+            registry,
+            noop_resampler(),
+            noop_resampler(),
+            Arc::new(Mutex::new(None)),
+        )
+    }
+
+    // --- fabricated decoder: each read_data writes 1024 stereo f32 frames as a
+    //     sample-index ramp (sample k -> k.0) and never finishes ---
+
+    const FAKE_FRAMES: usize = 1024;
+
+    extern "C" fn d_read_data(_ud: *mut c_void, dest: ReadData) -> ReadInfo {
+        let samples = FAKE_FRAMES * DEFAULT_AUDIO_FORMAT.channel_count as usize;
+        let out = dest.channels_output as *mut f32;
+        for k in 0..samples {
+            unsafe { *out.add(k) = k as f32 };
+        }
+        ReadInfo { format: DEFAULT_AUDIO_FORMAT, frame_count: FAKE_FRAMES as u32, status: ReadStatus::Ok }
+    }
+    extern "C" fn d_destroy(_ud: *mut c_void) -> i32 { 0 }
+
+    fn fake_decoder() -> PlaybackPluginInstance {
+        PlaybackPluginInstance {
+            user_data: ptr::null_mut(),
+            plugin: PlaybackPlugin {
+                api_version: plugin_types::RV_PLAYBACK_PLUGIN_API_VERSION,
+                name: fake_name(),
+                version: fake_name(),
+                library_version: fake_name(),
+                probe_can_play: None,
+                supported_extensions: None,
+                create: None,
+                destroy: Some(d_destroy),
+                event: None,
+                open: None,
+                close: None,
+                read_data: Some(d_read_data),
+                seek: None,
+                metadata: None,
+                static_init: None,
+                settings_updated: None,
+                static_destroy: None,
+                viz_info: None,
+                tracker_columns: None,
+                tracker_channels: None,
+                scope_channels: None,
+                tracker_position: None,
+                tracker_channel_rows: None,
+                tracker_cells: None,
+                scope_enable: None,
+                scope_samples: None,
+                vu_levels: None,
+            },
+        }
+    }
+
+    #[test]
+    fn index_generation_and_offset() {
+        let mut i = Index::default();
+        i.set(5);
+        assert_eq!(i.get(), 5);
+        i.add(3);
+        assert_eq!(i.get(), 8);
+        let before = i.value;
+        i.bump_generation();
+        assert_eq!(i.value, before + (1 << 32));
+        assert_eq!(i.get(), 8, "bump_generation must not touch the low offset");
+        i.set(2);
+        assert_eq!(i.get(), 2);
+        assert_eq!(i.value >> 32, 1, "set must keep the generation");
+    }
+
+    #[test]
+    fn byte_size_format_per_sample_format() {
+        // F32 stereo: 4 bytes * 2 ch
+        assert_eq!(get_byte_size_format(DEFAULT_AUDIO_FORMAT, 512), 4096);
+        assert_eq!(get_byte_size_format(DEFAULT_AUDIO_FORMAT, 0), 0);
+        let fmt = |f| AudioFormat { audio_format: f, channel_count: 1, sample_rate: 48000 };
+        assert_eq!(get_byte_size_format(fmt(AudioStreamFormat::U8), 10), 10);
+        assert_eq!(get_byte_size_format(fmt(AudioStreamFormat::S16), 10), 20);
+        assert_eq!(get_byte_size_format(fmt(AudioStreamFormat::S24), 10), 30);
+        assert_eq!(get_byte_size_format(fmt(AudioStreamFormat::S32), 10), 40);
+        assert_eq!(get_byte_size_format(fmt(AudioStreamFormat::F32), 10), 40);
+    }
+
+    #[test]
+    fn get_data_direct_copy() {
+        let mut st = make_internal();
+        st.ring_buffer = (0..64u32).map(|i| i as u8).collect();
+        st.read_index.value = 0;
+        st.write_index.value = 64;
+
+        let (tx, rx) = unbounded();
+        get_data(&mut st, DEFAULT_AUDIO_FORMAT, 2, &tx); // 2 frames = 16 bytes
+
+        match rx.recv().unwrap() {
+            PlaybackReply::Data(d) => assert_eq!(&d[..], &(0..16u8).collect::<Vec<_>>()[..]),
+            _ => panic!("expected Data"),
+        }
+        assert_eq!(st.read_index.get(), 16);
+    }
+
+    #[test]
+    fn get_data_wraps_ring() {
+        let mut st = make_internal();
+        st.ring_buffer = (0..64u32).map(|i| i as u8).collect();
+        st.read_index.value = 56;
+        // write far ahead (next generation) so the data guard passes
+        st.write_index.value = (1 << 32) | 16;
+
+        let (tx, rx) = unbounded();
+        get_data(&mut st, DEFAULT_AUDIO_FORMAT, 2, &tx); // 16 bytes, wraps at 64
+
+        match rx.recv().unwrap() {
+            PlaybackReply::Data(d) => {
+                let mut expected: Vec<u8> = (56..64).collect();
+                expected.extend(0..8u8);
+                assert_eq!(&d[..], &expected[..]);
+            }
+            _ => panic!("expected Data"),
+        }
+        assert_eq!(st.read_index.get(), 8);
+        assert_eq!(st.read_index.value >> 32, 1, "wrap must bump the generation");
+    }
+
+    #[test]
+    fn copy_buffer_to_ring_direct_and_wrap() {
+        let mut st = make_internal();
+        st.ring_buffer = vec![0u8; 64];
+        for k in 0..16 {
+            st.temp_gen[0][k] = (100 + k) as u8;
+        }
+
+        // direct: write at 0, 16 bytes fits
+        copy_buffer_to_ring(&mut st, 2, 0);
+        assert_eq!(&st.ring_buffer[0..16], &(100..116u8).collect::<Vec<_>>()[..]);
+        assert_eq!(st.write_index.get(), 16);
+
+        // wrap: write at 56, 16 bytes spans the end
+        st.write_index = Index::default();
+        st.write_index.value = 56;
+        copy_buffer_to_ring(&mut st, 2, 0);
+        assert_eq!(&st.ring_buffer[56..64], &(100..108u8).collect::<Vec<_>>()[..]);
+        assert_eq!(&st.ring_buffer[0..8], &(108..116u8).collect::<Vec<_>>()[..]);
+        assert_eq!(st.write_index.get(), 8);
+        assert_eq!(st.write_index.value >> 32, 1, "wrap must bump the generation");
+    }
+
+    // Headless end-to-end: fake decoder -> decode thread -> ring -> GetData,
+    // no audio device, no real plugin .so.
+    #[test]
+    fn headless_pipeline_flows_frames() {
+        let playback = Playback::new_with_resamplers(noop_resampler(), noop_resampler())
+            .expect("spawn playback");
+        playback.queue_playback(fake_decoder()).expect("queue");
+
+        let frames = 512usize;
+        let want_bytes = get_byte_size_format(DEFAULT_AUDIO_FORMAT, frames);
+
+        // Poll until the decode thread has filled enough ring data.
+        let mut data = None;
+        for _ in 0..2000 {
+            let (tx, rx) = unbounded();
+            playback
+                .channel
+                .send(PlaybackMessage::GetData(DEFAULT_AUDIO_FORMAT, frames, tx))
+                .unwrap();
+            match rx.recv().unwrap() {
+                PlaybackReply::Data(d) => {
+                    data = Some(d);
+                    break;
+                }
+                PlaybackReply::NoData => thread::sleep(std::time::Duration::from_millis(1)),
+                other => panic!("unexpected reply: {:?}", PlaybackReplyName(&other)),
+            }
+        }
+
+        let data = data.expect("decode thread never produced frames");
+        assert_eq!(data.len(), want_bytes, "wrong byte count back from pipeline");
+
+        // First read starts at ring offset 0, so it returns the decoder's first
+        // samples: the ramp 0.0, 1.0, 2.0, ...
+        let floats: Vec<f32> = data.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        assert_eq!(floats[0], 0.0);
+        assert_eq!(floats[1023], 1023.0);
+        assert!(floats.windows(2).all(|w| w[1] > w[0]), "ramp must be strictly increasing");
+    }
+
+    // PlaybackReply has no Debug; name just the variant for panic messages.
+    struct PlaybackReplyName<'a>(&'a PlaybackReply);
+    impl std::fmt::Debug for PlaybackReplyName<'_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            let s = match self.0 {
+                PlaybackReply::PlaybackStarted => "PlaybackStarted",
+                PlaybackReply::PlaybackEnded => "PlaybackEnded",
+                PlaybackReply::OutOfData => "OutOfData",
+                PlaybackReply::InvalidRequest => "InvalidRequest",
+                PlaybackReply::NoData => "NoData",
+                PlaybackReply::TrackerPosition(_) => "TrackerPosition",
+                PlaybackReply::Data(_) => "Data",
+            };
+            f.write_str(s)
+        }
+    }
 }
 
