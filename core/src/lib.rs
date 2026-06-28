@@ -51,7 +51,7 @@ impl Core {
 
         let playback = Playback::new(plugins.resample_plugins.clone())?;
         let playlist = Playlist::new(&vfs, &playback, plugins.decoder_plugins.clone())?;
-        let mut output = Output::new(&playback, plugins.output_plugins.clone());
+        let mut output = Output::new(&playback);
 
         output.create_default_output();
 
