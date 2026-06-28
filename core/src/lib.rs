@@ -1,10 +1,8 @@
 use anyhow::{bail, Context, Result};
-use log::{error, trace, LevelFilter, Log, SetLoggerError};
+use log::trace;
 use services::PluginService;
 use std::path::{Path, PathBuf};
-use std::ffi::CStr;
 use vfs::Vfs;
-use std::os::raw::c_char;
 
 pub mod output;
 pub mod playback;
@@ -39,8 +37,7 @@ pub struct Core {
 }
 
 impl Core {
-    pub fn new(args: &Args) -> Box<Core> {
-        // TODO: Fix unwraps
+    pub fn new(args: &Args) -> Result<Core> {
         let mut plugins = Plugins::default();
         let vfs = Vfs::new();
         let plugin_service = PluginService::new("core", vfs.clone());
@@ -50,13 +47,13 @@ impl Core {
             plugins.add_plugins_from_path(path, &plugin_service);
         }
 
-        let playback = Playback::new(plugins.resample_plugins.clone()).unwrap();
-        let playlist = Playlist::new(&vfs, &playback, plugins.decoder_plugins.clone()).unwrap();
+        let playback = Playback::new(plugins.resample_plugins.clone())?;
+        let playlist = Playlist::new(&vfs, &playback, plugins.decoder_plugins.clone())?;
         let mut output = Output::new(&playback, plugins.output_plugins.clone());
 
         output.create_default_output();
 
-        Box::new(Core {
+        Ok(Core {
             plugin_service,
             plugins,
             vfs,
@@ -145,8 +142,8 @@ fn get_dirs_files(args: &mut pico_args::Arguments, opt: &'static str) -> Result<
     }
 }
 
-//
-fn init_core_create() -> Result<Args> {
+/// Parse command-line arguments into `Args`.
+pub fn parse_args() -> Result<Args> {
     let mut pargs = pico_args::Arguments::from_env();
     let datadir_over: Option<String> = pargs.opt_value_from_str("--data-dir").unwrap();
 
@@ -162,65 +159,12 @@ fn init_core_create() -> Result<Args> {
     Ok(args)
 }
 
-#[no_mangle]
-pub fn core_create() -> *mut Core {
-    let args = match init_core_create() {
-        Err(e) => {
-            error!("Unable to create core: {:?}", e);
-            return std::ptr::null_mut();
-        }
-        Ok(args) => args,
-    };
-
-    let core = Box::leak(Core::new(&args));
-
-    trace!("core create");
-    core as *mut Core
-}
-
-/// # Safety
-///
-/// Foobar
-#[no_mangle]
-pub unsafe fn core_destroy(core: *mut Core, _prepare_reload: bool) {
-    let _ = Box::from_raw(core);
-    trace!("core destroy");
-}
-
-/// # Safety
-///
-/// Foobar
-#[no_mangle]
-pub unsafe fn core_update(core: *mut Core) -> u64 {
-    let core: &mut Core = &mut *core;
-    core.update()
-}
-
-/// # Safety
-///
-/// Foobar
-#[no_mangle]
-pub unsafe fn core_load_url(core: *mut Core, url: *const c_char) {
-    let core: &mut Core = &mut *core;
-    let name = CStr::from_ptr(url);
-    core.load_url(&name.to_string_lossy());
-}
-
-#[no_mangle]
-pub fn core_setup_logger(
-    logger: &'static dyn Log,
-    level: LevelFilter,
-) -> Result<(), SetLoggerError> {
-    log::set_max_level(level);
-    log::set_logger(logger)
-}
-
-#[no_mangle]
-pub extern "C" fn core_show_args() {
+/// Print the command-line help for the core's arguments.
+pub fn print_help() {
     println!("{}", HELP);
 }
 
-const HELP: &str = "  --data-dir    PATH    Override data directory. 
+const HELP: &str = "  --data-dir    PATH    Override data directory.
   --plugins     PATH    Overide the paths for plugins. Both filenames and directories are supported 
   --play        PATH    Select file(s) to play. Depending on supported sources, urls may be used here as well.
   --randomize           Randomize the files to play if there are more than one.

@@ -4,9 +4,6 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
-[lib]
-crate_type = ["dylib"]
-
 [dependencies]
 vfs = { path = "../vfs" }
 plugin_types = { path = "../plugin_types" }

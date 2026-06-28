@@ -1,0 +1,17 @@
+[package]
+name = "retrovert-console"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "retrovert-console"
+path = "src/main.rs"
+
+[dependencies]
+rv_core = { path = "../core" }
+anyhow = "1.0"
+log = "0.4"
+pico-args = "0.5"
+simplelog = "0.11"
+directories = "4.0"
