@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use cfixed_string::CFixedString;
 use libloading::{Library, Symbol};
-use log::{error, trace};
+use log::{error, info, trace};
 use plugin_types::{ProbeResult};
 use services::PluginService;
 use std::{sync::Arc};
@@ -140,13 +140,42 @@ impl Plugins {
         bail!("No correct entry point found for plugin {}", name)
     }
 
+    /// Smoke-create each decoder instance at startup so a plugin that loads but
+    /// can't instantiate fails loudly here, not mid-playback. The resampler
+    /// instance is created (and required) by `Playback`, so it's only logged.
+    pub fn report_loaded(&self) {
+        let decoders = self.decoder_plugins.read();
+        let resamplers = self.resample_plugins.read();
+        info!("Loaded {} decoder plugin(s), {} resample plugin(s)", decoders.len(), resamplers.len());
+
+        for p in decoders.iter() {
+            let name = p.plugin_funcs.get_name();
+            let version = p.plugin_funcs.get_version();
+            match (p.plugin_funcs.create, p.plugin_funcs.destroy) {
+                (Some(create), Some(destroy)) => {
+                    let user_data = create(p.service.get_c_api() as *const _);
+                    if user_data.is_null() {
+                        error!("decoder {} {} loaded but create() returned null", name, version);
+                    } else {
+                        info!("decoder {} {} — instance created", name, version);
+                        destroy(user_data);
+                    }
+                }
+                _ => error!("decoder {} {} missing create/destroy", name, version),
+            }
+        }
+
+        for p in resamplers.iter() {
+            info!("resampler {} {}", p.plugin_funcs.get_name(), p.plugin_funcs.get_version());
+        }
+    }
+
     fn check_file_type(entry: &DirEntry) -> bool {
         let path = entry.path();
 
-        if let Some(ext) = path.extension() {
-            ext == "rvp"
-        } else {
-            false
+        match path.extension().and_then(|e| e.to_str()) {
+            Some(ext) => matches!(ext, "rvp" | "so" | "dylib"),
+            None => false,
         }
     }
 

@@ -88,10 +88,12 @@ impl Output {
     }
 
     pub fn create_default_output(&mut self) {
-        // TODO: Error handling
         let output_plugs = self.output_plugins.read();
 
-        let op = &output_plugs[0];
+        let Some(op) = output_plugs.first() else {
+            error!("No output plugin loaded; audio will not play");
+            return;
+        };
 
         let plugin_name = op.plugin_funcs.get_name();
         let service_funcs = op.service.get_c_api();
